@@ -36,13 +36,18 @@ X_EMAIL = os.getenv("X_EMAIL")
 # Optional Proxy Configuration for Twikit (HTTP/SOCKS5)
 PROXY_URL = os.getenv("PROXY_URL")
 
-# Parse Admin User ID
+# Parse Admin User ID(s)
+ADMIN_USER_IDS = []
 ADMIN_USER_ID = None
 if ADMIN_USER_ID_RAW:
-    try:
-        ADMIN_USER_ID = int(ADMIN_USER_ID_RAW)
-    except ValueError:
-        logger.error("ADMIN_USER_ID must be a valid integer.")
+    for part in ADMIN_USER_ID_RAW.split(","):
+        try:
+            if part.strip():
+                ADMIN_USER_IDS.append(int(part.strip()))
+        except ValueError:
+            logger.error(f"Admin User ID part '{part}' must be a valid integer.")
+    if ADMIN_USER_IDS:
+        ADMIN_USER_ID = ADMIN_USER_IDS[0]
 
 # Parse Thread IDs to integers if provided
 def _parse_thread_id(val):

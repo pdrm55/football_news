@@ -24,7 +24,7 @@ bot = telebot.TeleBot(config.TELEGRAM_BOT_TOKEN)
 
 # Helpers for Gates
 def is_admin(user_id: int) -> bool:
-    return user_id == config.ADMIN_USER_ID
+    return user_id in getattr(config, 'ADMIN_USER_IDS', [config.ADMIN_USER_ID])
 
 def clean_text_formatting(text: str) -> str:
     """Removes bolding, asterisks, emojis, hashtags, semicolons, and em dashes."""
