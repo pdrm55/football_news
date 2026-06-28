@@ -405,88 +405,156 @@ def extract_article_published_date(html_text: str) -> datetime.datetime | None:
     return None
 
 
+# Per-domain CSS selectors pointing at the container that holds the article feed/list.
+# Link extraction is restricted to these containers so the crawler does not harvest
+# unrelated URLs from site headers, footers, nav bars, or trending/most-read widgets.
+# Selectors are tried in order; the first one that matches wins. <main> is the last,
+# most generic option before falling back to the whole (de-noised) document.
+_FEED_CONTAINER_SELECTORS = {
+    'skysports.com': ['.news-list', '.sdc-site-tiles', '.page__main', 'main'],
+    'mirror.co.uk': ['.publication-body', '[data-component="ArticleList"]', 'main'],
+    'liverpoolecho.co.uk': ['.publication-body', '[data-component="ArticleList"]', 'main'],
+    'thesun.co.uk': ['.sun-row', '.teadit', 'main'],
+    'dailymail.co.uk': ['.author-articles', '#content', 'main'],
+    'dailymail.com': ['.author-articles', '#content', 'main'],
+    'telegraph.co.uk': ['.card-grid', 'main'],
+    'theguardian.com': ['#maincontent', 'main'],
+    'independent.co.uk': ['.author-page', 'main'],
+    'standard.co.uk': ['main'],
+    'thetimes.co.uk': ['main'],
+    'thetimes.com': ['main'],
+    'theathletic.com': ['main'],
+    'nytimes.com': ['main'],
+}
+
+# Class/id substrings that mark non-feed chrome (nav, promos, related/trending widgets).
+_NOISE_TAGS = ('header', 'footer', 'nav', 'aside')
+_NOISE_KEYWORDS = (
+    'header', 'footer', 'nav', 'menu', 'masthead', 'breadcrumb',
+    'related', 'trending', 'most-read', 'most-popular', 'popular',
+    'promo', 'sidebar', 'newsletter', 'subscribe', 'social', 'share',
+    'recommend', 'sponsor', 'advert', 'banner', 'cookie',
+)
+
+
+def _decompose_noise(soup) -> None:
+    """Strips header/footer/nav/aside and promo/trending/related widgets from the soup,
+    in place, so that even fallback link scanning stays inside real content."""
+    targets = list(soup.find_all(_NOISE_TAGS))
+    for el in soup.find_all(attrs={'class': True}):
+        classes = ' '.join(el.get('class', [])).lower()
+        if any(kw in classes for kw in _NOISE_KEYWORDS):
+            targets.append(el)
+    for el in soup.find_all(attrs={'id': True}):
+        if any(kw in (el.get('id') or '').lower() for kw in _NOISE_KEYWORDS):
+            targets.append(el)
+    for el in targets:
+        try:
+            el.decompose()
+        except Exception:
+            # Element may already be detached because a parent was decomposed first.
+            pass
+
+
+def _resolve_feed_containers(soup, author_domain: str) -> list:
+    """Returns the elements that hold the article feed for a domain, after removing
+    chrome. Falls back to <main>/[role=main] and finally the whole document."""
+    _decompose_noise(soup)
+
+    selectors = []
+    for known_domain, sels in _FEED_CONTAINER_SELECTORS.items():
+        if known_domain in author_domain:
+            selectors = sels
+            break
+
+    for selector in selectors:
+        containers = soup.select(selector)
+        if containers:
+            return containers
+
+    containers = soup.select('main, [role="main"]')
+    return containers if containers else [soup]
+
+
+def _is_article_url(author_domain: str, url_path: str) -> bool:
+    """Domain-aware test: does this path point to a specific article (not a hub,
+    tag page, topic page, or author landing page)?"""
+    if 'athletic' in author_domain or 'nytimes.com' in author_domain:
+        parts = [p for p in url_path.split('/') if p]
+        return len(parts) >= 2 and parts[0] == 'athletic' and parts[1].isdigit()
+
+    if 'thetimes.co.uk' in author_domain or 'thetimes.com' in author_domain:
+        return '/article/' in url_path
+
+    if 'telegraph.co.uk' in author_domain or 'theguardian.com' in author_domain:
+        return any(f'/{year}/' in url_path for year in ('2025', '2026', '2027'))
+
+    if 'independent.co.uk' in author_domain:
+        return url_path.endswith('.html') and '/author/' not in url_path
+
+    if 'standard.co.uk' in author_domain:
+        return (not any(x in url_path for x in ('/author/', '/tag/', '/topic/', '/category/'))
+                and len(url_path.split('/')) >= 3)
+
+    if 'dailymail.co.uk' in author_domain or 'dailymail.com' in author_domain:
+        return '/article-' in url_path and url_path.endswith('.html')
+
+    if 'thesun.co.uk' in author_domain:
+        if '/sport/' in url_path or '/football/' in url_path:
+            parts = [p for p in url_path.split('/') if p]
+            return len(parts) >= 3 and any(p.isdigit() for p in parts)
+        return False
+
+    if 'skysports.com' in author_domain:
+        return '/football/news/' in url_path
+
+    # Fallback for Reach plc (liverpoolecho, mirror) and other domains
+    return (('/sport/' in url_path or '/football/' in url_path)
+            and not any(x in url_path for x in
+                        ('/author/', '/tag/', '/topic/', '/category/', '/all-about/', '/rss/')))
+
+
 def extract_articles_from_author_page(author_url: str, html_text: str) -> list[str]:
-    """Parses the HTML of an author profile page and extracts the top 5 article detail URLs.
-    Avoids returning the author profile URL itself, topic hubs, or non-article links.
+    """Parses the HTML of an author/topic page and extracts the top 5 article detail URLs.
+
+    Link extraction is restricted to the page's article-feed container(s) so that links
+    from headers, footers, nav bars, and trending/most-read widgets are never queued.
+    Avoids returning the author/topic URL itself, topic hubs, or non-article links.
     """
     if not html_text:
         return []
-        
+
     from urllib.parse import urljoin, urlparse
-    
+
     soup = BeautifulSoup(html_text, 'html.parser')
     parsed_author = urlparse(author_url)
     author_domain = parsed_author.netloc.lower()
-    
+
+    containers = _resolve_feed_containers(soup, author_domain)
+
     links = []
     seen = set()
-    
-    for tag in soup.find_all('a'):
-        href = tag.get('href', '').strip()
-        if not href or href.startswith('#') or href.startswith('javascript:'):
-            continue
-            
-        full_url = urljoin(author_url, href)
-        parsed_url = urlparse(full_url)
-        
-        if parsed_url.netloc.lower() != author_domain:
-            continue
-            
-        url_path = parsed_url.path
-        
-        if url_path.rstrip('/') == parsed_author.path.rstrip('/'):
-            continue
-            
-        is_article = False
-        
-        if 'athletic' in author_domain or 'nytimes.com' in author_domain:
-            parts = [p for p in url_path.split('/') if p]
-            if len(parts) >= 2 and parts[0] == 'athletic' and parts[1].isdigit():
-                is_article = True
-                
-        elif 'thetimes.co.uk' in author_domain or 'thetimes.com' in author_domain:
-            if '/article/' in url_path:
-                is_article = True
-                
-        elif 'telegraph.co.uk' in author_domain:
-            if any(f'/{year}/' in url_path for year in ('2025', '2026', '2027')):
-                is_article = True
-                
-        elif 'theguardian.com' in author_domain:
-            if any(f'/{year}/' in url_path for year in ('2025', '2026', '2027')):
-                is_article = True
-                
-        elif 'independent.co.uk' in author_domain:
-            if url_path.endswith('.html') and not '/author/' in url_path:
-                is_article = True
-                
-        elif 'standard.co.uk' in author_domain:
-            if not any(x in url_path for x in ('/author/', '/tag/', '/topic/', '/category/')) and len(url_path.split('/')) >= 3:
-                is_article = True
-                
-        elif 'dailymail.co.uk' in author_domain or 'dailymail.com' in author_domain:
-            if '/article-' in url_path and url_path.endswith('.html'):
-                is_article = True
-                
-        elif 'thesun.co.uk' in author_domain:
-            if '/sport/' in url_path or '/football/' in url_path:
-                parts = [p for p in url_path.split('/') if p]
-                if len(parts) >= 3 and any(p.isdigit() for p in parts):
-                    is_article = True
-                    
-        elif 'skysports.com' in author_domain:
-            if '/football/news/' in url_path:
-                is_article = True
-                
-        else:
-            # Fallback for Reach plc (liverpoolecho, mirror) and other domains
-            if ('/sport/' in url_path or '/football/' in url_path) and not any(x in url_path for x in ('/author/', '/tag/', '/topic/', '/category/', '/all-about/', '/rss/')):
-                is_article = True
-                
-        if is_article and full_url not in seen:
-            seen.add(full_url)
-            links.append(full_url)
-            
+
+    for container in containers:
+        for tag in container.find_all('a'):
+            href = tag.get('href', '').strip()
+            if not href or href.startswith('#') or href.startswith('javascript:'):
+                continue
+
+            full_url = urljoin(author_url, href)
+            parsed_url = urlparse(full_url)
+
+            # Stay on the same domain and skip the author/topic landing page itself.
+            if parsed_url.netloc.lower() != author_domain:
+                continue
+            url_path = parsed_url.path
+            if url_path.rstrip('/') == parsed_author.path.rstrip('/'):
+                continue
+
+            if _is_article_url(author_domain, url_path) and full_url not in seen:
+                seen.add(full_url)
+                links.append(full_url)
+
     return links[:5]
 
 
