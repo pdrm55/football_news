@@ -31,8 +31,8 @@ def clean_text_formatting(text: str) -> str:
     if not text:
         return ""
     
-    # 1. Remove bold/italic markdown characters (* and **)
-    text = text.replace('**', '').replace('*', '')
+    # 1. Remove bold/italic markdown characters (*, **, _, __, `)
+    text = text.replace('**', '').replace('*', '').replace('__', '').replace('_', '').replace('`', '')
     
     # 2. Remove em dashes (— and --) and replace with commas
     text = text.replace('—', ', ').replace('--', ', ')

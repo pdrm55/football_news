@@ -230,7 +230,7 @@ def scrape_web_page(url: str) -> tuple[str | None, str | None, str | None]:
         if og_image and og_image.get('content'):
             image_url = og_image['content']
         else:
-            twitter_image = soup.find('meta', name='twitter:image')
+            twitter_image = soup.find('meta', attrs={'name': 'twitter:image'})
             if twitter_image and twitter_image.get('content'):
                 image_url = twitter_image['content']
             else:
@@ -242,12 +242,44 @@ def scrape_web_page(url: str) -> tuple[str | None, str | None, str | None]:
                             image_url = src
                             break
                             
-        # Extract content text (all paragraphs > 30 chars)
-        paragraphs = soup.find_all('p')
-        content_text = "\n".join([p.get_text().strip() for p in paragraphs if len(p.get_text().strip()) > 30])
+        # Target the main article body container if available for cleaner, full text
+        body_selectors = [
+            'article',
+            'div.article-body',
+            'div.article__body',
+            'div.article-content',
+            'div.entry-content',
+            'div.post-content',
+            'div.story-body',
+            'div[itemprop="articleBody"]',
+            'main'
+        ]
         
+        content_text = ""
+        article_body = None
+        for selector in body_selectors:
+            el = soup.select_one(selector)
+            if el:
+                # If we found a container, get all paragraphs inside it
+                paragraphs = el.find_all('p')
+                if len(paragraphs) >= 2:  # Prefer containers with substantial text
+                    article_body = el
+                    break
+        
+        if article_body:
+            paragraphs = article_body.find_all('p')
+            # Extract text, clean up white space, and filter out very short paragraphs (e.g. less than 15 chars)
+            paragraphs_text = [p.get_text().strip() for p in paragraphs if len(p.get_text().strip()) > 15]
+            content_text = "\n\n".join(paragraphs_text)
+            
         if not content_text:
-            # Fallback to general text if no paragraphs
+            # Fallback 1: Extract all <p> tags in the document if no main container was found
+            paragraphs = soup.find_all('p')
+            paragraphs_text = [p.get_text().strip() for p in paragraphs if len(p.get_text().strip()) > 15]
+            content_text = "\n\n".join(paragraphs_text)
+            
+        if not content_text:
+            # Fallback 2: General text if no paragraphs at all
             content_text = soup.get_text()
             
         return title, content_text, image_url
@@ -321,23 +353,28 @@ def run_gemini_summarizer(title: str, content: str, active_filters: list[str]) -
         "2. COMPACT AND DIRECT STRUCTURE\n"
         "- For each identified talking point, deliver exactly one response block. Do not include multiple options, headings, intro text, or conversational filler.\n"
         "- Pack all critical factual data (names, clubs, specific monetary figures, dates, and historical context) into 1 to 3 tightly constructed sentences per talking point.\n\n"
-        "3. GRAMMAR, TONE, AND VOICE\n"
+        "3. HANDLING DIRECT QUOTES\n"
+        "- When a talking point contains a direct quote from a manager, player, or official, first write a single, highly concise, and coherent plain sentence that summarizes what the quote is talking about.\n"
+        "- Do not break up this summary intro with periods or unnecessary punctuation. Keep it short, fluid, and straight to the point.\n"
+        "- End this single summary sentence with a colon (:).\n"
+        "- Directly after the colon, insert the exact quote from the source text to ensure the direct quote is fully preserved under the summary.\n\n"
+        "4. GRAMMAR, TONE, AND VOICE\n"
         "- Write with a spartan, informative, and authoritative tone.\n"
         "- Use the active voice exclusively; do not use passive voice constructions.\n"
         "- Address the core subject directly without setup phrases, introductory filler, or generic commentary.\n"
         "- Ensure every sentence is clear and punchy, maintaining absolute coherence without becoming verbose.\n\n"
-        "4. FORCED PROPER NOUN REPETITION (BOXING EFFECT)\n"
-        "- When a specific individual, club, or entity is mentioned in relation to an action, metric, or status, explicitly repeat that proper noun.\n"
-        "- Avoid relying on pronouns (he, she, it, they, him, her, them, his, their) or generic identifiers (the midfielder, the club, the player) when linking actions back to the subject. Keep the identity locked in by restating the exact name or entity throughout the rewrite.\n\n"
-        "5. STRICT PUNCTUATION AND SYMBOL RESTRICTIONS\n"
+        "5. FORCED PROPER NOUN REPETITION (BOXING EFFECT) AND EXCEPTION\n"
+        "- When linking a specific player, club, or entity to an action, metric, or status, explicitly repeat that proper noun instead of relying on generic identifiers (e.g., the midfielder, the player, the club) or ambiguous pronouns.\n"
+        "- EXCEPTION FOR THE SUBJECT'S OWN ACTIONS: Do not unnaturally repeat the identical subject's name twice within the same independent clause or immediate action string when it refers back to the self (e.g., do not write 'Thomas Tuchel confirmed that Thomas Tuchel will manage'). Use standard pronouns like 'he' or 'she' only when the subject is performing their own continuous action, ensuring the sentence remains grammatically coherent and natural while still enforcing proper noun repetition across different entities.\n\n"
+        "6. STRICT PUNCTUATION AND SYMBOL RESTRICTIONS\n"
         "- Never use em dashes (— or --) under any circumstances. Use commas, periods, or parentheses to separate clauses.\n"
-        "- Do not use semicolons, hashtags, or markdown formatting like bolding or asterisks (NO ** or *) in the final output text. Do not use emojis.\n\n"
-        "6. BANNED WORD FILTER\n"
+        "- Do not use semicolons, hashtags, or markdown formatting like bolding or asterisks (NO ** or *) in the final output text. Emojis are strictly forbidden.\n\n"
+        "7. BANNED WORD FILTER\n"
         "- Do not use any of the following restricted words: can, may, just, that, very, really, literally, actually, certainly, probably, basically, could, maybe, delve, embark, enlightening, esteemed, shed light, craft, crafting, imagine, realm, game-changer, unlock, discover, skyrocket, abyss, not alone, in a world where, revolutionize, disruptive, utilize, utilizing, dive deep, tapestry, illuminate, unveil, pivotal, intricate, elucidate, hence, furthermore, however, moreover, in conclusion, in summary.\n\n"
-        "7. LABELLING RUMOURS\n"
-        "- If the original article title or text indicates that the transfer is a rumour or speculation (e.g. contains words like 'rumour', 'rumor', 'linked', 'speculation', 'speculated', 'tracked', 'monitored'), you MUST explicitly mention the word 'rumour' or 'rumours' in the generated summary.\n\n"
         "8. SKIP CRITERIA (USELESS NEWS FILTER)\n"
-        "- If the incoming text or article is completely devoid of hard facts, specific player names, transfer figures, or definite contract details (i.e. is generic gossip or clickbait), you MUST respond with exactly the word: SKIP"
+        "- If the incoming text or article is completely devoid of hard facts, specific player names, transfer figures, or definite contract details (i.e. is generic gossip or clickbait), you MUST respond with exactly the word: SKIP\n\n"
+        "9. LABELLING RUMOURS\n"
+        "- If the original article title or text indicates that the transfer is a rumour or speculation (e.g. contains words like 'rumour', 'rumor', 'linked', 'speculation', 'speculated', 'tracked', 'monitored'), you MUST explicitly mention the word 'rumour' or 'rumours' in the generated summary."
     )
     
     prompt = f"Title: {clean_title}\n\nContent:\n{clean_content}"
