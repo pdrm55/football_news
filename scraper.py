@@ -112,6 +112,20 @@ class XScraper:
                         logger.info(f"Skipping Reply tweet from @{handle}: {t.text[:50]}...")
                         continue
                         
+                    # Skip tweets older than 24 hours
+                    if t.created_at:
+                        try:
+                            from email.utils import parsedate_to_datetime
+                            import datetime
+                            tweet_dt = parsedate_to_datetime(t.created_at)
+                            now = datetime.datetime.now(datetime.timezone.utc)
+                            age = now - tweet_dt
+                            if age > datetime.timedelta(hours=24):
+                                logger.info(f"Skipping tweet from @{handle} - older than 24 hours (age: {age.days} days)")
+                                continue
+                        except Exception as date_err:
+                            logger.warning(f"Could not parse tweet date '{t.created_at}': {date_err}")
+                        
                     # Extract media if present
                     media_url = None
                     if hasattr(t, 'media') and t.media:
@@ -300,11 +314,21 @@ def fetch_google_news(team_query: str) -> list[dict]:
         for entry in feed.entries[:5]:  # Limit to top 5 news entries per check
             link = entry.get('link')
             unique_id = link
-            
-            # Since Google News links are redirects, we can use the redirect link itself
-            # or try to resolve/scrape it. To avoid failures, we use the Google News RSS info
-            # as the base. If possible, we scrape the article for better body content and image.
             title = entry.get('title', 'No Title')
+            
+            # Skip entries older than 24 hours
+            pub_parsed = entry.get('published_parsed')
+            if pub_parsed:
+                try:
+                    import datetime
+                    pub_dt = datetime.datetime(*pub_parsed[:6], tzinfo=datetime.timezone.utc)
+                    now = datetime.datetime.now(datetime.timezone.utc)
+                    age = now - pub_dt
+                    if age > datetime.timedelta(hours=24):
+                        logger.info(f"Skipping Google News entry '{title}' - older than 24 hours (published {age.days} days ago)")
+                        continue
+                except Exception as date_err:
+                    logger.warning(f"Could not parse Google News publication date for '{title}': {date_err}")
             content = entry.get('summary', entry.get('description', ''))
             image_url = extract_rss_image(entry)
             
@@ -397,9 +421,14 @@ def run_gemini_summarizer(title: str, content: str, active_filters: list[str]) -
 
 
 def detect_team_from_text(title: str, content: str, default_tag: str | None, allow_fallback: bool = True) -> str | None:
-    """Analyzes the text content to dynamically assign the correct team tag (Arsenal, Liverpool, Inter).
-    Falls back to the default tag if no clear keywords are found and allow_fallback is True.
+    """Analyzes the text content to dynamically assign the correct team tag.
+    To prevent club mixing and cross-posting, it only checks keywords for the source's designated default_tag.
+    If it matches the default_tag keywords, it returns that tag.
+    Otherwise, if allow_fallback is True, it returns the default_tag; if False, it returns None.
     """
+    if not default_tag or default_tag not in ('Arsenal', 'Liverpool', 'Inter'):
+        return default_tag
+        
     text = f"{title or ''}\n{content or ''}".lower()
     
     # Try loading from team_keywords.json, fallback to defaults if not found or error
@@ -411,33 +440,24 @@ def detect_team_from_text(title: str, content: str, default_tag: str | None, all
         except Exception as e:
             logger.warning(f"Could not load team_keywords.json: {e}. Falling back to default keywords.")
             
-    arsenal_keywords = team_keywords.get('Arsenal', ['arsenal', 'gunners', 'arteta', 'saka', 'odegaard', 'saliba', 'rice', 'havertz', 'raya', 'emirates', 'hleb'])
-    liverpool_keywords = team_keywords.get('Liverpool', ['liverpool', 'reds', 'salah', 'van dijk', 'alisson', 'szoboszlai', 'nunez', 'luis diaz', 'mac allister', 'alexander-arnold', 'trent', 'slot', 'anfield', 'firmino', 'klopp'])
-    inter_keywords = team_keywords.get('Inter', ['inter milan', 'nerazzurri', 'inzaghi', 'lautaro', 'martinez', 'thuram', 'barella', 'calhanoglu', 'bastoni', 'sommer', 'san siro'])
-    
-    matches = {'Arsenal': 0, 'Liverpool': 0, 'Inter': 0}
-    
-    for kw in arsenal_keywords:
-        if kw.strip() and kw.lower() in text:
-            matches['Arsenal'] += 1
-    for kw in liverpool_keywords:
-        if kw.strip() and kw.lower() in text:
-            matches['Liverpool'] += 1
-    for kw in inter_keywords:
-        if kw.strip() and kw.lower() in text:
-            matches['Inter'] += 1
+    keywords = team_keywords.get(default_tag, [])
+    if not keywords:
+        # Fallback to default lists
+        if default_tag == 'Arsenal':
+            keywords = ['arsenal', 'gunners', 'arteta', 'saka', 'odegaard', 'saliba', 'rice', 'havertz', 'raya', 'emirates', 'hleb']
+        elif default_tag == 'Liverpool':
+            keywords = ['liverpool', 'reds', 'salah', 'van dijk', 'alisson', 'szoboszlai', 'nunez', 'luis diaz', 'mac allister', 'alexander-arnold', 'trent', 'slot', 'anfield', 'firmino', 'klopp']
+        elif default_tag == 'Inter':
+            keywords = ['inter milan', 'nerazzurri', 'inzaghi', 'lautaro', 'martinez', 'thuram', 'barella', 'calhanoglu', 'bastoni', 'sommer', 'san siro']
             
-    # Find the team with the maximum matches
-    best_team = None
-    max_matches = 0
-    for team, count in matches.items():
-        if count > max_matches:
-            max_matches = count
-            best_team = team
+    matches = 0
+    for kw in keywords:
+        if kw.strip() and kw.lower() in text:
+            matches += 1
             
-    if max_matches > 0:
-        logger.info(f"Dynamically detected team tag: {best_team} (matches: {max_matches}) based on content.")
-        return best_team
+    if matches > 0:
+        logger.info(f"Confirmed team tag: {default_tag} (matches: {matches}) based on content.")
+        return default_tag
         
     return default_tag if allow_fallback else None
 
@@ -470,6 +490,20 @@ def run_scraper_ingestion():
                         continue
                         
                     title = entry.get('title', 'No Title')
+                    
+                    # Skip entries older than 24 hours
+                    pub_parsed = entry.get('published_parsed')
+                    if pub_parsed:
+                        try:
+                            import datetime
+                            pub_dt = datetime.datetime(*pub_parsed[:6], tzinfo=datetime.timezone.utc)
+                            now = datetime.datetime.now(datetime.timezone.utc)
+                            age = now - pub_dt
+                            if age > datetime.timedelta(hours=24):
+                                logger.info(f"Skipping RSS entry '{title}' - older than 24 hours (published {age.days} days ago)")
+                                continue
+                        except Exception as date_err:
+                            logger.warning(f"Could not parse RSS publication date for '{title}': {date_err}")
                     # Scrape full text from web page for better quality content
                     web_title, web_content, web_image = scrape_web_page(link)
                     
