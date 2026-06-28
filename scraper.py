@@ -38,10 +38,18 @@ class XScraper:
 
         if config.X_USERNAME or os.path.exists("cookies.json"):
             try:
-                # If cookies exist, we assume real mode is possible
+                # If cookies exist, verify they work by performing a lightweight fetch
                 if os.path.exists("cookies.json"):
+                    from twikit import Client
+                    async def verify_cookies():
+                        client = Client('en-US', proxy=config.PROXY_URL) if config.PROXY_URL else Client('en-US')
+                        client.load_cookies("cookies.json")
+                        # Perform a lightweight API call to verify session
+                        await client.get_user_by_screen_name('SamJDean')
+                    
+                    asyncio.run(verify_cookies())
                     self.mock_mode = False
-                    logger.info("Successfully loaded X (Twitter) session from cookies.json.")
+                    logger.info("Successfully loaded X (Twitter) session from cookies.json and verified connection.")
                 elif self.username and self.password:
                     # Perform initial login to generate cookies
                     from twikit import Client
@@ -58,7 +66,7 @@ class XScraper:
                     self.mock_mode = False
                     logger.info("Successfully logged in to X and saved session to cookies.json.")
             except Exception as e:
-                logger.error(f"Failed to login to Twikit: {e}. Falling back to Simulator Mode.")
+                logger.error(f"X login/verification failed: {e}. Falling back to Simulator Mode.")
                 self.mock_mode = True
         else:
             logger.info("X credentials not fully provided. Running X Scraper in Simulator Mode.")
@@ -120,19 +128,23 @@ class XScraper:
                         logger.info(f"Skipping Reply tweet from @{handle}: {t.text[:50]}...")
                         continue
                         
-                    # Skip tweets older than 24 hours
-                    if t.created_at:
-                        try:
-                            from email.utils import parsedate_to_datetime
-                            import datetime
-                            tweet_dt = parsedate_to_datetime(t.created_at)
-                            now = datetime.datetime.now(datetime.timezone.utc)
-                            age = now - tweet_dt
-                            if age > datetime.timedelta(hours=24):
-                                logger.info(f"Skipping tweet from @{handle} - older than 24 hours (age: {age.days} days)")
-                                continue
-                        except Exception as date_err:
-                            logger.warning(f"Could not parse tweet date '{t.created_at}': {date_err}")
+                    # Skip tweets older than 24 hours (or if they lack a creation date)
+                    if not t.created_at:
+                        logger.info(f"Skipping tweet from @{handle} - missing creation date.")
+                        continue
+                        
+                    try:
+                        from email.utils import parsedate_to_datetime
+                        import datetime
+                        tweet_dt = parsedate_to_datetime(t.created_at)
+                        now = datetime.datetime.now(datetime.timezone.utc)
+                        age = now - tweet_dt
+                        if age > datetime.timedelta(hours=24):
+                            logger.info(f"Skipping tweet from @{handle} - older than 24 hours (age: {age.days} days)")
+                            continue
+                    except Exception as date_err:
+                        logger.warning(f"Could not parse tweet date '{t.created_at}': {date_err}")
+                        continue
                         
                     # Extract media if present
                     media_url = None
@@ -158,7 +170,7 @@ class XScraper:
                 return asyncio.run(_async_fetch())
             except Exception as e:
                 logger.error(f"Error fetching tweets for @{handle}: {e}. Falling back to mock data.")
-                # Fall back to mock if Twitter API fails temporarily
+                self.mock_mode = True
 
         # Mock Mode / Fallback Simulator
         logger.info(f"[Mock Mode] Generating simulated tweets for @{handle} ({team_tag})")
@@ -586,19 +598,23 @@ def fetch_google_news(team_query: str) -> list[dict]:
             unique_id = link
             title = entry.get('title', 'No Title')
             
-            # Skip entries older than 24 hours
+            # Skip entries older than 24 hours (or if they lack a published date)
             pub_parsed = entry.get('published_parsed')
-            if pub_parsed:
-                try:
-                    import datetime
-                    pub_dt = datetime.datetime(*pub_parsed[:6], tzinfo=datetime.timezone.utc)
-                    now = datetime.datetime.now(datetime.timezone.utc)
-                    age = now - pub_dt
-                    if age > datetime.timedelta(hours=24):
-                        logger.info(f"Skipping Google News entry '{title}' - older than 24 hours (published {age.days} days ago)")
-                        continue
-                except Exception as date_err:
-                    logger.warning(f"Could not parse Google News publication date for '{title}': {date_err}")
+            if not pub_parsed:
+                logger.info(f"Skipping Google News entry '{title}' - missing publication date.")
+                continue
+                
+            try:
+                import datetime
+                pub_dt = datetime.datetime(*pub_parsed[:6], tzinfo=datetime.timezone.utc)
+                now = datetime.datetime.now(datetime.timezone.utc)
+                age = now - pub_dt
+                if age > datetime.timedelta(hours=24):
+                    logger.info(f"Skipping Google News entry '{title}' - older than 24 hours (published {age.days} days ago)")
+                    continue
+            except Exception as date_err:
+                logger.warning(f"Could not parse Google News publication date for '{title}': {date_err}")
+                continue
             content = entry.get('summary', entry.get('description', ''))
             image_url = extract_rss_image(entry)
             
@@ -776,19 +792,23 @@ def run_scraper_ingestion():
                         
                     title = entry.get('title', 'No Title')
                     
-                    # Skip entries older than 24 hours
+                    # Skip entries older than 24 hours (or if they lack a published date)
                     pub_parsed = entry.get('published_parsed')
-                    if pub_parsed:
-                        try:
-                            import datetime
-                            pub_dt = datetime.datetime(*pub_parsed[:6], tzinfo=datetime.timezone.utc)
-                            now = datetime.datetime.now(datetime.timezone.utc)
-                            age = now - pub_dt
-                            if age > datetime.timedelta(hours=24):
-                                logger.info(f"Skipping RSS entry '{title}' - older than 24 hours (published {age.days} days ago)")
-                                continue
-                        except Exception as date_err:
-                            logger.warning(f"Could not parse RSS publication date for '{title}': {date_err}")
+                    if not pub_parsed:
+                        logger.info(f"Skipping RSS entry '{title}' - missing publication date.")
+                        continue
+                        
+                    try:
+                        import datetime
+                        pub_dt = datetime.datetime(*pub_parsed[:6], tzinfo=datetime.timezone.utc)
+                        now = datetime.datetime.now(datetime.timezone.utc)
+                        age = now - pub_dt
+                        if age > datetime.timedelta(hours=24):
+                            logger.info(f"Skipping RSS entry '{title}' - older than 24 hours (published {age.days} days ago)")
+                            continue
+                    except Exception as date_err:
+                        logger.warning(f"Could not parse RSS publication date for '{title}': {date_err}")
+                        continue
                     # Scrape full text from web page for better quality content
                     web_title, web_content, web_image = scrape_web_page(link)
                     
@@ -894,12 +914,15 @@ def run_scraper_ingestion():
                             art_html = page.html
                             
                             pub_dt = extract_article_published_date(art_html)
-                            if pub_dt:
-                                now = datetime.datetime.now(datetime.timezone.utc)
-                                age = now - pub_dt
-                                if age > datetime.timedelta(hours=24):
-                                    logger.info(f"Skipping article '{art_url}' - older than 24 hours (published {age.days} days ago)")
-                                    continue
+                            if not pub_dt:
+                                logger.info(f"Skipping article '{art_url}' - missing/unparseable publication date.")
+                                continue
+                                 
+                            now = datetime.datetime.now(datetime.timezone.utc)
+                            age = now - pub_dt
+                            if age > datetime.timedelta(hours=24):
+                                logger.info(f"Skipping article '{art_url}' - older than 24 hours (published {age.days} days ago)")
+                                continue
                                     
                             title, content, image_url = parse_article_html(art_html)
                             if title or content:
@@ -995,36 +1018,4 @@ def run_scraper_ingestion():
     logger.info("Scraper Ingestion Cycle Completed.")
 
 
-def run_summarization_pipeline():
-    """Runs Gemini summarizer on all 'pending' articles and updates their status."""
-    logger.info("Running Summarization Pipeline...")
-    pending_articles = database.get_pending_articles()
-    
-    if not pending_articles:
-        logger.info("No pending articles to summarize.")
-        return
-        
-    # Get active filters
-    active_filters = [f['keyword'] for f in database.get_filters()]
-    
-    for art in pending_articles:
-        title = art['original_title'] or ""
-        content = art['original_content'] or ""
-        art_id = art['id']
-        
-        logger.info(f"Summarizing article {art_id}: {title[:50]}...")
-        summary = run_gemini_summarizer(title, content, active_filters)
-        
-        if summary is None:
-            # API failure, keep it pending to try again later
-            continue
-            
-        if summary.upper() == 'SKIP' or 'SKIP' in summary:
-            # Filter hit, mark as sent (so it's not processed/sent to Telegram)
-            logger.info(f"Article {art_id} skipped due to keyword filters.")
-            database.update_article_summary_status(art_id, 'SKIP', 'sent')
-        else:
-            # Successfully summarized, mark as processed (ready to send)
-            database.update_article_summary_status(art_id, summary, 'processed')
-            
-    logger.info("Summarization Pipeline Completed.")
+

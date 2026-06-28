@@ -8,6 +8,8 @@ logger = logging.getLogger("database")
 @contextmanager
 def get_db():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.row_factory = sqlite3.Row
     try:
         yield conn
@@ -121,6 +123,9 @@ def init_db():
                 cursor.execute("RELEASE migration_test")
         except Exception as migration_err:
             logger.error(f"Migration error for 'skipped' status: {migration_err}")
+            
+        # Create status index for fast lookups
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_articles_status ON news_articles(status)")
             
     logger.info("Database initialized successfully.")
 
@@ -242,3 +247,19 @@ def update_article_status(article_id: int, status: str):
             "UPDATE news_articles SET status = ? WHERE id = ?",
             (status, article_id)
         )
+
+def delete_old_articles(days: int = 7) -> int:
+    """Deletes processed/skipped/sent news articles older than N days.
+    Returns the number of deleted rows.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            DELETE FROM news_articles 
+            WHERE status IN ('sent', 'skipped') 
+              AND datetime(created_at) < datetime('now', ?)
+        """, (f"-{days} days",))
+        deleted_count = cursor.rowcount
+        if deleted_count > 0:
+            logger.info(f"Purged {deleted_count} old sent/skipped articles older than {days} days.")
+        return deleted_count

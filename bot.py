@@ -1,3 +1,4 @@
+import os
 import time
 import logging
 import re
@@ -203,9 +204,15 @@ def broadcast_processed_articles():
         time.sleep(2)
 
 
+def is_skip_text(text: str) -> bool:
+    """Helper to detect if Gemini returned the word 'SKIP' as a complete word."""
+    return bool(re.search(r'\bSKIP\b', text.upper()))
+
+
 def process_and_broadcast_pipeline():
-    """Runs Gemini summarizer on all 'pending' articles and broadcasts them immediately."""
-    logger.info("Running In-Loop Summarization and Broadcast Pipeline...")
+    """Fetches pending articles, processes them through filters/Gemini,
+    and immediately broadcasts them to Telegram one-by-one.
+    """
     
     # 1. Clear any already processed backlog first
     broadcast_processed_articles()
@@ -237,10 +244,6 @@ def process_and_broadcast_pipeline():
         # 1. Skip Gemini for X/Twitter posts since they are already short/summarized
         if source_type == 'x_account':
             logger.info(f"Article {art_id} is from X/Twitter. Bypassing Gemini API and using raw text.")
-            
-            # Apply local filter checks for X/Twitter posts (disabled per client request)
-            pass
-                
             summary = content
         else:
             # 2. Summarize web page or RSS articles using Gemini
@@ -251,14 +254,14 @@ def process_and_broadcast_pipeline():
             # API failure, keep it pending to try again later
             continue
             
-        if summary.upper() == 'SKIP' or 'SKIP' in summary:
+        if is_skip_text(summary):
             logger.info(f"Article {art_id} skipped due to keyword filters or AI decision.")
             database.update_article_summary_status(art_id, 'SKIP', 'skipped')
             continue
             
         # 3. Handle multiple updates split by delimiter ---TALKING_POINT---
         chunks = [c.strip() for c in summary.split('---TALKING_POINT---') if c.strip()]
-        valid_chunks = [c for c in chunks if c.upper() != 'SKIP' and 'SKIP' not in c.upper()]
+        valid_chunks = [c for c in chunks if not is_skip_text(c)]
         
         if not valid_chunks:
             logger.info(f"Article {art_id} skipped: no valid non-SKIP chunks found.")
@@ -337,6 +340,11 @@ def scheduler_loop():
             scraper.run_scraper_ingestion()
             # 2. Process and Broadcast in real-time
             process_and_broadcast_pipeline()
+            # 3. Clean up database records older than 7 days
+            try:
+                database.delete_old_articles(days=7)
+            except Exception as prune_err:
+                logger.error(f"Error pruning database: {prune_err}")
         except Exception as e:
             logger.error(f"Error in background scheduler: {e}")
         
@@ -497,17 +505,17 @@ def show_sources_menu(chat_id, message_id):
     sources = database.get_sources()
     src_text = ""
     if not sources:
-        src_text = "\n_No sources registered yet._"
+        src_text = "\n<i>No sources registered yet.</i>"
     else:
         for s in sources:
-            src_text += f"\n• [{s['team_tag']}] *{s['type'].upper()}*: `{s['value']}`"
+            src_text += f"\n• [{s['team_tag']}] <b>{s['type'].upper()}</b>: <code>{html.escape(s['value'])}</code>"
             
     bot.edit_message_text(
-        f"📁 *Sources Manager*\n{src_text}",
+        f"📁 <b>Sources Manager</b>\n{src_text}",
         chat_id,
         message_id,
         reply_markup=markup,
-        parse_mode='Markdown'
+        parse_mode='HTML'
     )
 
 def show_add_source_types(chat_id, message_id):
@@ -559,9 +567,9 @@ def save_source_input(message, stype, team):
     if stype == 'x_account':
         success = database.add_source(stype, value, team)
         if success:
-            bot.send_message(message.chat.id, f"✅ Successfully added source: *{stype.upper()}* for *{team}*", parse_mode='Markdown')
+            bot.send_message(message.chat.id, f"✅ Successfully added source: <b>{stype.upper()}</b> for <b>{team}</b>", parse_mode='HTML')
         else:
-            bot.send_message(message.chat.id, f"❌ Failed: Source *{value}* already exists for {team} under type {stype}.", parse_mode='Markdown')
+            bot.send_message(message.chat.id, f"❌ Failed: Source <b>{html.escape(value)}</b> already exists for {team} under type {stype}.", parse_mode='HTML')
     else:
         # Run RSS & Cloudflare auto-detection!
         bot.send_message(message.chat.id, "🔍 Analyzing URL and auto-detecting configuration...")
@@ -573,25 +581,25 @@ def save_source_input(message, stype, team):
             if success:
                 bot.send_message(
                     message.chat.id,
-                    f"✅ **Source Added Successfully!**\n\n"
-                    f"• **Auto-Detected Type:** `{detected_stype.upper()}`\n"
-                    f"• **Resolved Value:** `{resolved_url}`\n"
-                    f"• **Reason:** {desc_msg}",
-                    parse_mode='Markdown'
+                    f"✅ <b>Source Added Successfully!</b>\n\n"
+                    f"• <b>Auto-Detected Type:</b> <code>{detected_stype.upper()}</code>\n"
+                    f"• <b>Resolved Value:</b> <code>{html.escape(resolved_url)}</code>\n"
+                    f"• <b>Reason:</b> {html.escape(desc_msg)}",
+                    parse_mode='HTML'
                 )
             else:
                 bot.send_message(
                     message.chat.id,
-                    f"❌ **Failed:** Source already exists as `{detected_stype.upper()}`:\n`{resolved_url}`",
-                    parse_mode='Markdown'
+                    f"❌ <b>Failed:</b> Source already exists as <code>{detected_stype.upper()}</code>:\n<code>{html.escape(resolved_url)}</code>",
+                    parse_mode='HTML'
                 )
         except Exception as e:
             # Fallback in case of error
             success = database.add_source(stype, value, team)
             if success:
-                bot.send_message(message.chat.id, f"✅ Added source: *{stype.upper()}* for *{team}* (Fallback)", parse_mode='Markdown')
+                bot.send_message(message.chat.id, f"✅ Added source: <b>{stype.upper()}</b> for <b>{team}</b> (Fallback)", parse_mode='HTML')
             else:
-                bot.send_message(message.chat.id, f"❌ Failed: {e}", parse_mode='Markdown')
+                bot.send_message(message.chat.id, f"❌ Failed: {html.escape(str(e))}", parse_mode='HTML')
                 
     send_main_menu(message.chat.id)
 
@@ -623,18 +631,18 @@ def show_filters_menu(chat_id, message_id):
     filters = database.get_filters()
     flt_text = ""
     if not filters:
-        flt_text = "\n_No filter keywords registered yet._"
+        flt_text = "\n<i>No filter keywords registered yet.</i>"
     else:
         for f in filters:
-            flt_text += f"\n• `{f['keyword']}`"
+            flt_text += f"\n• <code>{html.escape(f['keyword'])}</code>"
             
     bot.edit_message_text(
-        f"🔍 *Filter Keywords Manager*\n"
+        f"🔍 <b>Filter Keywords Manager</b>\n"
         f"Articles containing these keywords will be ignored by Gemini.{flt_text}",
         chat_id,
         message_id,
         reply_markup=markup,
-        parse_mode='Markdown'
+        parse_mode='HTML'
     )
 
 def prompt_filter_value(chat_id):
@@ -650,7 +658,7 @@ def save_filter_input(message):
         
     success = database.add_filter(value)
     if success:
-        bot.send_message(message.chat.id, f"✅ Added filter keyword: `{value.lower()}`", parse_mode='Markdown')
+        bot.send_message(message.chat.id, f"✅ Added filter keyword: <code>{html.escape(value.lower())}</code>", parse_mode='HTML')
     else:
         bot.send_message(message.chat.id, "❌ Filter keyword already exists.")
         
