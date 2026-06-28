@@ -12,10 +12,18 @@ from bs4 import BeautifulSoup
 from google import genai
 from google.genai import types
 
+import datetime
 import config
 import database
 
 logger = logging.getLogger("scraper")
+
+PROTECTED_DOMAINS = [
+    'nytimes.com', 'thetimes.com', 'telegraph.co.uk',
+    'theguardian.com', 'independent.co.uk', 'standard.co.uk',
+    'dailymail.com', 'dailymail.co.uk', 'thesun.co.uk', 'skysports.com',
+    'liverpoolecho.co.uk', 'mirror.co.uk'
+]
 
 class XScraper:
     """Handles fetching tweets from X (Twitter) using Twikit.
@@ -216,21 +224,14 @@ def extract_rss_image(entry) -> str | None:
     return None
 
 
-def scrape_web_page(url: str) -> tuple[str | None, str | None, str | None]:
-    """Scrapes a general web page using BeautifulSoup.
-    Returns: (title, main_content_text, image_url)
+def parse_article_html(html_content: str) -> tuple[str | None, str | None, str | None]:
+    """Parses HTML content using BeautifulSoup and extracts (title, content, image_url)
+    using the standard selector logic.
     """
+    if not html_content:
+        return None, None, None
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
-        # Resolve redirect first
-        response = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
-        if response.status_code != 200:
-            logger.warning(f"Failed to fetch {url}, status code: {response.status_code}")
-            return None, None, None
-            
-        soup = BeautifulSoup(response.content, 'html.parser')
+        soup = BeautifulSoup(html_content, 'html.parser')
         
         # Extract title
         title = ""
@@ -274,32 +275,301 @@ def scrape_web_page(url: str) -> tuple[str | None, str | None, str | None]:
         for selector in body_selectors:
             el = soup.select_one(selector)
             if el:
-                # If we found a container, get all paragraphs inside it
                 paragraphs = el.find_all('p')
-                if len(paragraphs) >= 2:  # Prefer containers with substantial text
+                if len(paragraphs) >= 2:
                     article_body = el
                     break
         
         if article_body:
             paragraphs = article_body.find_all('p')
-            # Extract text, clean up white space, and filter out very short paragraphs (e.g. less than 15 chars)
             paragraphs_text = [p.get_text().strip() for p in paragraphs if len(p.get_text().strip()) > 15]
             content_text = "\n\n".join(paragraphs_text)
             
         if not content_text:
-            # Fallback 1: Extract all <p> tags in the document if no main container was found
             paragraphs = soup.find_all('p')
             paragraphs_text = [p.get_text().strip() for p in paragraphs if len(p.get_text().strip()) > 15]
             content_text = "\n\n".join(paragraphs_text)
             
         if not content_text:
-            # Fallback 2: General text if no paragraphs at all
             content_text = soup.get_text()
             
         return title, content_text, image_url
     except Exception as e:
+        logger.error(f"Error parsing HTML content: {e}")
+        return None, None, None
+
+
+def scrape_web_page(url: str) -> tuple[str | None, str | None, str | None]:
+    """Scrapes a general web page using BeautifulSoup.
+    Returns: (title, main_content_text, image_url)
+    """
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+        response = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
+        if response.status_code != 200:
+            logger.warning(f"Failed to fetch {url}, status code: {response.status_code}")
+            return None, None, None
+            
+        return parse_article_html(response.content)
+    except Exception as e:
         logger.error(f"Error scraping web page {url}: {e}")
         return None, None, None
+
+
+def extract_article_published_date(html_text: str) -> datetime.datetime | None:
+    """Attempts to extract the publication date of an article from its HTML metadata.
+    Returns a timezone-aware datetime in UTC, or None if not found.
+    """
+    if not html_text:
+        return None
+    try:
+        import json
+        import datetime
+        from email.utils import parsedate_to_datetime
+        
+        soup = BeautifulSoup(html_text, 'html.parser')
+        
+        # 1. Check common meta tags
+        meta_selectors = [
+            {'property': 'article:published_time'},
+            {'name': 'pubdate'},
+            {'property': 'og:pubdate'},
+            {'name': 'publish-date'},
+            {'property': 'article:published'},
+            {'name': 'publication_date'}
+        ]
+        for attrs in meta_selectors:
+            tag = soup.find('meta', attrs=attrs)
+            if tag and tag.get('content'):
+                try:
+                    val = tag['content'].strip()
+                    if 't' in val.lower() or '-' in val:
+                        val = val.replace('Z', '+00:00')
+                        return datetime.datetime.fromisoformat(val).astimezone(datetime.timezone.utc)
+                    else:
+                        return parsedate_to_datetime(val).astimezone(datetime.timezone.utc)
+                except Exception:
+                    pass
+                    
+        # 2. Check JSON-LD
+        for script in soup.find_all('script', type='application/ld+json'):
+            if script.string:
+                try:
+                    data = json.loads(script.string.strip())
+                    if isinstance(data, dict):
+                        date_str = data.get('datePublished') or data.get('dateCreated')
+                        if not date_str and '@graph' in data:
+                            for item in data['@graph']:
+                                date_str = item.get('datePublished') or item.get('dateCreated')
+                                if date_str:
+                                    break
+                        if date_str:
+                            date_str = date_str.replace('Z', '+00:00')
+                            return datetime.datetime.fromisoformat(date_str).astimezone(datetime.timezone.utc)
+                    elif isinstance(data, list):
+                        for item in data:
+                            date_str = item.get('datePublished') or item.get('dateCreated')
+                            if date_str:
+                                date_str = date_str.replace('Z', '+00:00')
+                                return datetime.datetime.fromisoformat(date_str).astimezone(datetime.timezone.utc)
+                except Exception:
+                    pass
+                    
+        # 3. Check <time> tag
+        time_tag = soup.find('time')
+        if time_tag and time_tag.get('datetime'):
+            try:
+                val = time_tag['datetime'].strip().replace('Z', '+00:00')
+                return datetime.datetime.fromisoformat(val).astimezone(datetime.timezone.utc)
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(f"Error in extract_article_published_date: {e}")
+    return None
+
+
+def extract_articles_from_author_page(author_url: str, html_text: str) -> list[str]:
+    """Parses the HTML of an author profile page and extracts the top 5 article detail URLs.
+    Avoids returning the author profile URL itself, topic hubs, or non-article links.
+    """
+    if not html_text:
+        return []
+        
+    from urllib.parse import urljoin, urlparse
+    
+    soup = BeautifulSoup(html_text, 'html.parser')
+    parsed_author = urlparse(author_url)
+    author_domain = parsed_author.netloc.lower()
+    
+    links = []
+    seen = set()
+    
+    for tag in soup.find_all('a'):
+        href = tag.get('href', '').strip()
+        if not href or href.startswith('#') or href.startswith('javascript:'):
+            continue
+            
+        full_url = urljoin(author_url, href)
+        parsed_url = urlparse(full_url)
+        
+        if parsed_url.netloc.lower() != author_domain:
+            continue
+            
+        url_path = parsed_url.path
+        
+        if url_path.rstrip('/') == parsed_author.path.rstrip('/'):
+            continue
+            
+        is_article = False
+        
+        if 'athletic' in author_domain or 'nytimes.com' in author_domain:
+            parts = [p for p in url_path.split('/') if p]
+            if len(parts) >= 2 and parts[0] == 'athletic' and parts[1].isdigit():
+                is_article = True
+                
+        elif 'thetimes.co.uk' in author_domain or 'thetimes.com' in author_domain:
+            if '/article/' in url_path:
+                is_article = True
+                
+        elif 'telegraph.co.uk' in author_domain:
+            if any(f'/{year}/' in url_path for year in ('2025', '2026', '2027')):
+                is_article = True
+                
+        elif 'theguardian.com' in author_domain:
+            if any(f'/{year}/' in url_path for year in ('2025', '2026', '2027')):
+                is_article = True
+                
+        elif 'independent.co.uk' in author_domain:
+            if url_path.endswith('.html') and not '/author/' in url_path:
+                is_article = True
+                
+        elif 'standard.co.uk' in author_domain:
+            if not any(x in url_path for x in ('/author/', '/tag/', '/topic/', '/category/')) and len(url_path.split('/')) >= 3:
+                is_article = True
+                
+        elif 'dailymail.co.uk' in author_domain or 'dailymail.com' in author_domain:
+            if '/article-' in url_path and url_path.endswith('.html'):
+                is_article = True
+                
+        elif 'thesun.co.uk' in author_domain:
+            if '/sport/' in url_path or '/football/' in url_path:
+                parts = [p for p in url_path.split('/') if p]
+                if len(parts) >= 3 and any(p.isdigit() for p in parts):
+                    is_article = True
+                    
+        elif 'skysports.com' in author_domain:
+            if '/football/news/' in url_path:
+                is_article = True
+                
+        else:
+            # Fallback for Reach plc (liverpoolecho, mirror) and other domains
+            if ('/sport/' in url_path or '/football/' in url_path) and not any(x in url_path for x in ('/author/', '/tag/', '/topic/', '/category/', '/all-about/', '/rss/')):
+                is_article = True
+                
+        if is_article and full_url not in seen:
+            seen.add(full_url)
+            links.append(full_url)
+            
+    return links[:5]
+
+
+def auto_detect_source_classification(url: str) -> tuple[str, str, str]:
+    """Helper to analyze a URL and auto-detect if it is a valid RSS feed,
+    a regular web page, or a Cloudflare-protected web page.
+    Returns: (detected_type, resolved_url, description_message)
+    """
+    url = url.strip()
+    if not url.startswith('http'):
+        return 'web_link', url, "Link lacks http/https protocol. Registered as regular Web Link."
+        
+    from urllib.parse import urljoin, urlparse
+    parsed = urlparse(url)
+    domain = parsed.netloc.lower()
+    
+    # Force protected domains to web_link for DrissionPage crawling
+    if any(d in domain for d in PROTECTED_DOMAINS):
+        return 'web_link', url, f"Domain '{domain}' is whitelisted as Cloudflare-protected. Registered as Web Link for DrissionPage crawling."
+    import requests
+    import feedparser
+    from bs4 import BeautifulSoup
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+    
+    # 1. Test if the entered URL is already a valid RSS feed
+    try:
+        feed = feedparser.parse(url)
+        if len(feed.entries) > 0:
+            return 'rss', url, "Valid RSS feed detected directly!"
+    except Exception:
+        pass
+        
+    # 2. Try fetching the page HTML using standard requests
+    try:
+        res = requests.get(url, headers=headers, timeout=8, allow_redirects=True)
+        
+        # If it returns Cloudflare status code or signature
+        cloudflare_signals = ['cloudflare', 'sucuri', 'ddos-guard', 'ray id', 'javascript is required', 'enable javascript']
+        res_text_lower = res.text.lower()
+        
+        if res.status_code in (403, 503) or any(sig in res_text_lower for sig in cloudflare_signals):
+            parsed = urlparse(url)
+            domain = parsed.netloc.lower()
+            domain_parts = domain.split('.')
+            if len(domain_parts) > 2:
+                clean_domain = '.'.join(domain_parts[-2:])
+            else:
+                clean_domain = domain
+                
+            if clean_domain not in PROTECTED_DOMAINS:
+                PROTECTED_DOMAINS.append(clean_domain)
+                logger.info(f"Dynamically added '{clean_domain}' to PROTECTED_DOMAINS list.")
+                
+            return 'web_link', url, f"Cloudflare/Paywall protection detected on {clean_domain}. Configured for Headless Chromium (DrissionPage) scraping."
+            
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.content, 'html.parser')
+            rss_link = None
+            for link_tag in soup.find_all('link', rel='alternate'):
+                l_type = link_tag.get('type', '').lower()
+                l_href = link_tag.get('href', '').strip()
+                if ('rss+xml' in l_type or 'atom+xml' in l_type) and l_href:
+                    rss_link = urljoin(url, l_href)
+                    break
+                    
+            if rss_link:
+                try:
+                    test_feed = feedparser.parse(rss_link)
+                    if len(test_feed.entries) > 0:
+                        return 'rss', rss_link, f"RSS feed auto-discovered in page header: {rss_link}"
+                except Exception:
+                    pass
+                    
+            # Check if common paths work as RSS
+            common_rss_paths = ['/feed', '/feed/', '/rss', '/rss.xml', '?service=rss']
+            for path in common_rss_paths:
+                try:
+                    test_url = urljoin(url, path)
+                    test_res = requests.get(test_url, headers=headers, timeout=4)
+                    if test_res.status_code == 200:
+                        test_feed = feedparser.parse(test_url)
+                        if len(test_feed.entries) > 0:
+                            return 'rss', test_url, f"RSS feed auto-discovered at common path: {test_url}"
+                except Exception:
+                    pass
+                    
+            return 'web_link', url, "Accessible website with no RSS feed. Registered as regular Web Link."
+            
+        else:
+            return 'web_link', url, f"Server responded with status code {res.status_code}. Registered as regular Web Link."
+            
+    except Exception as e:
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower()
+        return 'web_link', url, f"Connection failed ({e}). Registered as Web Link (DrissionPage fallback)."
 
 
 def fetch_google_news(team_query: str) -> list[dict]:
@@ -472,7 +742,22 @@ def run_scraper_ingestion():
     sources = database.get_sources()
     x_client = XScraper()
     
+    # Separate standard sources from Cloudflare-protected web link sources
+    regular_sources = []
+    protected_web_sources = []
+    
     for src in sources:
+        if src['type'] == 'web_link' and not 'transferfeed.com' in src['value']:
+            from urllib.parse import urlparse
+            parsed_url = urlparse(src['value'])
+            domain = parsed_url.netloc.lower()
+            if any(d in domain for d in PROTECTED_DOMAINS):
+                protected_web_sources.append(src)
+                continue
+        regular_sources.append(src)
+        
+    # Process Regular Sources
+    for src in regular_sources:
         source_id = src['id']
         source_type = src['type']
         value = src['value']
@@ -568,6 +853,77 @@ def run_scraper_ingestion():
                         database.save_article(source_id, t['id'], t['title'], t['content'], t['media_url'], detected_team)
             except Exception as e:
                 logger.error(f"Error processing X account {value}: {e}")
+
+    # Process Cloudflare-Protected Web Sources (Throttled Headless Chromium)
+    if protected_web_sources:
+        logger.info(f"Starting DrissionPage batch scraping for {len(protected_web_sources)} protected sources...")
+        from DrissionPage import ChromiumPage, ChromiumOptions
+        import datetime
+        
+        co = ChromiumOptions()
+        co.headless(True)
+        co.set_argument('--no-sandbox')
+        co.set_argument('--disable-gpu')
+        co.set_user_agent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+        
+        page = None
+        try:
+            page = ChromiumPage(co)
+            
+            for idx, src in enumerate(protected_web_sources, 1):
+                source_id = src['id']
+                value = src['value']
+                team_tag = src['team_tag']
+                
+                logger.info(f"[{idx}/{len(protected_web_sources)}] DrissionPage scraping author: {value} ({team_tag})")
+                
+                try:
+                    page.get(value)
+                    time.sleep(5)
+                    author_html = page.html
+                    
+                    article_urls = extract_articles_from_author_page(value, author_html)
+                    logger.info(f"Found {len(article_urls)} articles for author {value}")
+                    
+                    for art_url in article_urls:
+                        if not database.article_exists(art_url):
+                            logger.info(f"Scraping protected article details: {art_url}")
+                            
+                            page.get(art_url)
+                            time.sleep(5)
+                            art_html = page.html
+                            
+                            pub_dt = extract_article_published_date(art_html)
+                            if pub_dt:
+                                now = datetime.datetime.now(datetime.timezone.utc)
+                                age = now - pub_dt
+                                if age > datetime.timedelta(hours=24):
+                                    logger.info(f"Skipping article '{art_url}' - older than 24 hours (published {age.days} days ago)")
+                                    continue
+                                    
+                            title, content, image_url = parse_article_html(art_html)
+                            if title or content:
+                                detected_team = detect_team_from_text(title, content, team_tag)
+                                database.save_article(source_id, art_url, title, content, image_url, detected_team)
+                                
+                    # Sequential sleep to avoid rate limiting and VPS RAM spikes
+                    if idx < len(protected_web_sources):
+                        delay = random.randint(15, 20)
+                        logger.info(f"Staggering: Sleeping for {delay} seconds before next author...")
+                        time.sleep(delay)
+                        
+                except Exception as e:
+                    logger.error(f"Error scraping protected source {value}: {e}")
+                    
+        except Exception as init_err:
+            logger.error(f"Failed to initialize DrissionPage: {init_err}")
+        finally:
+            if page:
+                try:
+                    page.quit()
+                    logger.info("Successfully terminated Headless Chromium browser session.")
+                except Exception as quit_err:
+                    logger.error(f"Error closing ChromiumPage: {quit_err}")
                 
     # 2. Run Global Google News Feeds (Mentions Cover)
     google_queries = {

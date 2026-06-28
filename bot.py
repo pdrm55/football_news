@@ -556,12 +556,43 @@ def save_source_input(message, stype, team):
         send_main_menu(message.chat.id)
         return
         
-    success = database.add_source(stype, value, team)
-    if success:
-        bot.send_message(message.chat.id, f"✅ Successfully added source: *{stype.upper()}* for *{team}*", parse_mode='Markdown')
+    if stype == 'x_account':
+        success = database.add_source(stype, value, team)
+        if success:
+            bot.send_message(message.chat.id, f"✅ Successfully added source: *{stype.upper()}* for *{team}*", parse_mode='Markdown')
+        else:
+            bot.send_message(message.chat.id, f"❌ Failed: Source *{value}* already exists for {team} under type {stype}.", parse_mode='Markdown')
     else:
-        bot.send_message(message.chat.id, f"❌ Failed: Source *{value}* already exists for {team} under type {stype}.", parse_mode='Markdown')
+        # Run RSS & Cloudflare auto-detection!
+        bot.send_message(message.chat.id, "🔍 Analyzing URL and auto-detecting configuration...")
         
+        try:
+            detected_stype, resolved_url, desc_msg = scraper.auto_detect_source_classification(value)
+            
+            success = database.add_source(detected_stype, resolved_url, team)
+            if success:
+                bot.send_message(
+                    message.chat.id,
+                    f"✅ **Source Added Successfully!**\n\n"
+                    f"• **Auto-Detected Type:** `{detected_stype.upper()}`\n"
+                    f"• **Resolved Value:** `{resolved_url}`\n"
+                    f"• **Reason:** {desc_msg}",
+                    parse_mode='Markdown'
+                )
+            else:
+                bot.send_message(
+                    message.chat.id,
+                    f"❌ **Failed:** Source already exists as `{detected_stype.upper()}`:\n`{resolved_url}`",
+                    parse_mode='Markdown'
+                )
+        except Exception as e:
+            # Fallback in case of error
+            success = database.add_source(stype, value, team)
+            if success:
+                bot.send_message(message.chat.id, f"✅ Added source: *{stype.upper()}* for *{team}* (Fallback)", parse_mode='Markdown')
+            else:
+                bot.send_message(message.chat.id, f"❌ Failed: {e}", parse_mode='Markdown')
+                
     send_main_menu(message.chat.id)
 
 def show_remove_source_list(chat_id, message_id):
