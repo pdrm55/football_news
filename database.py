@@ -1,6 +1,7 @@
 import sqlite3
 import logging
 from contextlib import contextmanager
+import config
 
 DB_FILE = "football_news.db"
 logger = logging.getLogger("database")
@@ -248,10 +249,13 @@ def update_article_status(article_id: int, status: str):
             (status, article_id)
         )
 
-def delete_old_articles(days: int = 7) -> int:
+def delete_old_articles(days: int = None) -> int:
     """Deletes processed/skipped/sent news articles older than N days.
     Returns the number of deleted rows.
     """
+    if days is None:
+        days = config.DB_RETENTION_DAYS
+        
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""

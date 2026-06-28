@@ -18,6 +18,9 @@ import database
 
 logger = logging.getLogger("scraper")
 
+# Note: requirements.txt installs 'twifork' as a drop-in replacement for 'twikit'.
+# We import from the 'twikit' namespace because the fork maintains namespace compatibility.
+
 PROTECTED_DOMAINS = [
     'nytimes.com', 'thetimes.com', 'telegraph.co.uk',
     'theguardian.com', 'independent.co.uk', 'standard.co.uk',
@@ -45,7 +48,7 @@ class XScraper:
                         client = Client('en-US', proxy=config.PROXY_URL) if config.PROXY_URL else Client('en-US')
                         client.load_cookies("cookies.json")
                         # Perform a lightweight API call to verify session
-                        await client.get_user_by_screen_name('SamJDean')
+                        await client.get_user_by_screen_name('X')
                     
                     asyncio.run(verify_cookies())
                     self.mock_mode = False
@@ -632,7 +635,7 @@ def fetch_google_news(team_query: str) -> list[dict]:
 
 
 def run_gemini_summarizer(title: str, content: str, active_filters: list[str]) -> str | None:
-    """Sends title & content to Google Gemini API (gemini-1.5-flash) for summarization.
+    """Sends title & content to Google Gemini API (configured model) for summarization.
     Returns: 'SKIP' or the summarized social media post.
     """
     if not config.GEMINI_API_KEY:
@@ -748,7 +751,7 @@ def detect_team_from_text(title: str, content: str, default_tag: str | None, all
     return default_tag if allow_fallback else None
 
 
-def run_scraper_ingestion():
+def run_scraper_ingestion(x_scraper=None):
     """Loops through all sources in the database and background Google News feeds,
     fetches new articles, and saves them to SQLite.
     """
@@ -756,7 +759,12 @@ def run_scraper_ingestion():
     
     # 1. Fetch User-Configured Sources from DB
     sources = database.get_sources()
-    x_client = XScraper()
+    
+    # Cache sources by (type, value, team_tag) to optimize DB access
+    global _sources_cache
+    _sources_cache = {(s['type'], s['value'], s['team_tag']): s['id'] for s in sources}
+    
+    x_client = x_scraper if x_scraper is not None else XScraper()
     
     # Separate standard sources from Cloudflare-protected web link sources
     regular_sources = []
@@ -995,19 +1003,15 @@ def run_scraper_ingestion():
                 
                 # Find or create the virtual system source for database schema integrity
                 system_source_value = f"system_google_news_{team.lower()}"
-                db_sources = database.get_sources()
-                system_source_id = None
-                for src in db_sources:
-                    if src['type'] == 'rss' and src['value'] == system_source_value:
-                        system_source_id = src['id']
-                        break
+                cache_key = ('rss', system_source_value, team)
+                system_source_id = _sources_cache.get(cache_key)
                 
                 if not system_source_id:
                     database.add_source('rss', system_source_value, team)
-                    for src in database.get_sources():
-                        if src['type'] == 'rss' and src['value'] == system_source_value:
-                            system_source_id = src['id']
-                            break
+                    # Re-fetch and update cache
+                    updated_sources = database.get_sources()
+                    _sources_cache = {(s['type'], s['value'], s['team_tag']): s['id'] for s in updated_sources}
+                    system_source_id = _sources_cache.get(cache_key)
                             
                 detected_team = detect_team_from_text(title, content, team, allow_fallback=False)
                 if not detected_team:

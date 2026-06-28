@@ -175,11 +175,10 @@ def broadcast_processed_articles():
     logger.info(f"Found {len(articles)} processed articles in database.")
     
     # Anti-flood protection
-    MAX_BACKLOG = 15
-    if len(articles) > MAX_BACKLOG:
-        logger.warning(f"Backlog of {len(articles)} articles exceeds threshold. Broadcasting only the {MAX_BACKLOG} most recent, marking the rest as sent.")
-        to_mark_sent = articles[:-MAX_BACKLOG]
-        to_broadcast = articles[-MAX_BACKLOG:]
+    if len(articles) > config.MAX_BACKLOG:
+        logger.warning(f"Backlog of {len(articles)} articles exceeds threshold. Broadcasting only the {config.MAX_BACKLOG} most recent, marking the rest as sent.")
+        to_mark_sent = articles[:-config.MAX_BACKLOG]
+        to_broadcast = articles[-config.MAX_BACKLOG:]
         
         for art in to_mark_sent:
             database.update_article_status(art['id'], 'sent')
@@ -224,10 +223,9 @@ def process_and_broadcast_pipeline():
         return
         
     # Limit processing batch size per cycle to prevent infinite blocks
-    MAX_BATCH_SIZE = 30
-    if len(pending_articles) > MAX_BATCH_SIZE:
-        logger.info(f"Batch size {len(pending_articles)} exceeds limit. Processing only first {MAX_BATCH_SIZE} items.")
-        pending_articles = pending_articles[:MAX_BATCH_SIZE]
+    if len(pending_articles) > config.MAX_BATCH_SIZE:
+        logger.info(f"Batch size {len(pending_articles)} exceeds limit. Processing only first {config.MAX_BATCH_SIZE} items.")
+        pending_articles = pending_articles[:config.MAX_BATCH_SIZE]
         
     active_filters = [f['keyword'] for f in database.get_filters()]
     
@@ -310,14 +308,15 @@ cookie_alert_sent = False
 def scheduler_loop():
     global cookie_alert_sent
     logger.info("Starting background scheduler loop...")
+    x_scraper = scraper.XScraper()
+    
     while True:
         try:
             logger.info("Running scheduled cycle...")
             
             # Check X cookies status and alert admin if expired
             if config.X_USERNAME:
-                x_test = scraper.XScraper()
-                if x_test.mock_mode:
+                if x_scraper.mock_mode:
                     if not cookie_alert_sent:
                         logger.warning("X Scraper fell back to Mock mode. Sending cookie alert to admin...")
                         try:
@@ -337,19 +336,19 @@ def scheduler_loop():
                     cookie_alert_sent = False
 
             # 1. Ingest new articles
-            scraper.run_scraper_ingestion()
+            scraper.run_scraper_ingestion(x_scraper=x_scraper)
             # 2. Process and Broadcast in real-time
             process_and_broadcast_pipeline()
-            # 3. Clean up database records older than 7 days
+            # 3. Clean up database records older than retention period
             try:
-                database.delete_old_articles(days=7)
+                database.delete_old_articles(days=config.DB_RETENTION_DAYS)
             except Exception as prune_err:
                 logger.error(f"Error pruning database: {prune_err}")
         except Exception as e:
             logger.error(f"Error in background scheduler: {e}")
         
-        logger.info("Scheduled cycle completed. Sleeping for 10 minutes.")
-        time.sleep(600)
+        logger.info(f"Scheduled cycle completed. Sleeping for {config.SCHEDULER_CYCLE_SECONDS} seconds.")
+        time.sleep(config.SCHEDULER_CYCLE_SECONDS)
 
 # Telegram Command Handlers
 @bot.message_handler(commands=['start'])
@@ -375,8 +374,7 @@ def handle_settings(message):
 
     send_main_menu(message.chat.id)
 
-# Menus & Keyboards
-def send_main_menu(chat_id):
+def get_main_menu_markup():
     markup = InlineKeyboardMarkup()
     markup.row(InlineKeyboardButton("📁 Sources Manager", callback_data="manage_sources"))
     markup.row(InlineKeyboardButton("🔍 Filter Keywords", callback_data="manage_filters"))
@@ -387,34 +385,27 @@ def send_main_menu(chat_id):
     markup.row(
         InlineKeyboardButton("👤 Switch X Account", callback_data="switch_x_account")
     )
-    
+    return markup
+
+
+# Menus & Keyboards
+def send_main_menu(chat_id):
     bot.send_message(
         chat_id,
-        "🛠 **Football News Bot - Admin Settings**\n"
+        "🛠 <b>Football News Bot - Admin Settings</b>\n"
         "Manage ingestion feeds, keywords, or run tasks manually.",
-        reply_markup=markup,
-        parse_mode='Markdown'
+        reply_markup=get_main_menu_markup(),
+        parse_mode='HTML'
     )
 
 def edit_to_main_menu(chat_id, message_id):
-    markup = InlineKeyboardMarkup()
-    markup.row(InlineKeyboardButton("📁 Sources Manager", callback_data="manage_sources"))
-    markup.row(InlineKeyboardButton("🔍 Filter Keywords", callback_data="manage_filters"))
-    markup.row(
-        InlineKeyboardButton("⚡ Run Scraper Now", callback_data="run_scr_now"),
-        InlineKeyboardButton("🔑 Update X Cookies", callback_data="update_x_cookies")
-    )
-    markup.row(
-        InlineKeyboardButton("👤 Switch X Account", callback_data="switch_x_account")
-    )
-    
     bot.edit_message_text(
-        "🛠 **Football News Bot - Admin Settings**\n"
+        "🛠 <b>Football News Bot - Admin Settings</b>\n"
         "Manage ingestion feeds, keywords, or run tasks manually.",
         chat_id,
         message_id,
-        reply_markup=markup,
-        parse_mode='Markdown'
+        reply_markup=get_main_menu_markup(),
+        parse_mode='HTML'
     )
 
 # Callback Query Handler
@@ -809,7 +800,7 @@ def save_new_ct0(message, username, password, email, auth_token):
         send_main_menu(message.chat.id)
         return
         
-    import json
+    from twikit import Client
     from dotenv import load_dotenv
     
     cookies_data = {
@@ -818,8 +809,9 @@ def save_new_ct0(message, username, password, email, auth_token):
     }
     
     try:
-        with open("cookies.json", "w", encoding="utf-8") as f:
-            json.dump(cookies_data, f, indent=4)
+        client = Client('en-US', proxy=config.PROXY_URL) if config.PROXY_URL else Client('en-US')
+        client.set_cookies(cookies_data)
+        client.save_cookies("cookies.json")
             
         update_env_file(username, password, email)
         
@@ -894,15 +886,16 @@ def save_ct0(message, auth_token):
         send_main_menu(message.chat.id)
         return
         
-    import json
+    from twikit import Client
     cookies_data = {
         "auth_token": auth_token,
         "ct0": ct0
     }
     
     try:
-        with open("cookies.json", "w", encoding="utf-8") as f:
-            json.dump(cookies_data, f, indent=4)
+        client = Client('en-US', proxy=config.PROXY_URL) if config.PROXY_URL else Client('en-US')
+        client.set_cookies(cookies_data)
+        client.save_cookies("cookies.json")
             
         bot.send_message(message.chat.id, "💾 فایل `cookies.json` با موفقیت روی سرور بروزرسانی شد.\nدر حال تست اتصال زنده...")
         

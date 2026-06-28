@@ -80,3 +80,9 @@ if missing_vars:
     )
 else:
     logger.info("Configuration loaded successfully.")
+
+# Scheduler & Ingestion Parameters
+SCHEDULER_CYCLE_SECONDS = 600  # 10 minutes loop
+MAX_BATCH_SIZE = 30            # Max pending articles to process in one cycle
+MAX_BACKLOG = 15               # Max backlog articles to process on startup
+DB_RETENTION_DAYS = 7          # DB retention policy period
