@@ -308,12 +308,16 @@ cookie_alert_sent = False
 def scheduler_loop():
     global cookie_alert_sent
     logger.info("Starting background scheduler loop...")
-    x_scraper = scraper.XScraper()
-    
+
     while True:
         try:
             logger.info("Running scheduled cycle...")
-            
+
+            # Build a fresh XScraper each cycle so the session is re-verified and
+            # mock_mode reflects the *current* cookie state (not the startup state).
+            # A single instance is reused within the cycle (cookie check + ingestion).
+            x_scraper = scraper.XScraper()
+
             # Check X cookies status and alert admin if expired
             if config.X_USERNAME:
                 if x_scraper.mock_mode:
