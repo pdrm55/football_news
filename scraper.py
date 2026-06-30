@@ -436,7 +436,10 @@ _NOISE_KEYWORDS = (
     'promo', 'sidebar', 'newsletter', 'subscribe', 'social', 'share',
     'recommend', 'sponsor', 'advert', 'banner', 'cookie',
     'also-read', 'more-on', 'you-may', 'read-more', 'outbrain', 'taboola',
-    'latest', 'watch', 'video-playlist', 'editor', 'betting', 'odds',
+    'video-playlist', 'betting', 'odds',
+    # NOTE: do not add broad words like 'latest'/'watch'/'editor' here -- they
+    # often appear in the class of the MAIN feed container ("latest news") and
+    # would cause us to strip the very articles we want.
 )
 
 
@@ -533,6 +536,19 @@ def _is_article_url(author_domain: str, url_path: str) -> bool:
         if not parts or parts[0] in ('author', 'authors', 'tag', 'tags', 'category', 'categories', 'page'):
             return False
         return len(parts) >= 2 and '-' in parts[-1] and 'page' not in parts
+
+    if 'metro.co.uk' in author_domain:
+        # Metro articles: /YYYY/MM/DD/<slug>-<id>/
+        parts = [p for p in url_path.split('/') if p]
+        return (len(parts) >= 4 and len(parts[0]) == 4 and parts[0].isdigit()
+                and parts[1].isdigit() and parts[2].isdigit())
+
+    if 'hayters.com' in author_domain:
+        # Hayters articles are top-level hyphenated slugs: /<headline-slug>/
+        parts = [p for p in url_path.split('/') if p]
+        if not parts or parts[0] in ('author', 'authors', 'category', 'tag', 'tags', 'page'):
+            return False
+        return len(parts) == 1 and '-' in parts[0]
 
     # Fallback for Reach plc (liverpoolecho, mirror) and other domains.
     # Reach hosts betting/affiliate content under /sport/ too, so exclude it explicitly.
