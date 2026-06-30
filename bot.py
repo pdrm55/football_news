@@ -559,6 +559,19 @@ def run_source_test(chat_id, url, team_tag):
         send_main_menu(chat_id)
 
 # Sources Views
+def _send_chunked_lines(chat_id, lines, limit=3900):
+    """Sends pre-formatted HTML lines as one or more messages, each kept under
+    Telegram's 4096-char hard limit (which a long source list would exceed)."""
+    buf = ""
+    for line in lines:
+        if len(buf) + len(line) > limit:
+            if buf:
+                bot.send_message(chat_id, buf, parse_mode='HTML')
+            buf = ""
+        buf += line
+    if buf:
+        bot.send_message(chat_id, buf, parse_mode='HTML')
+
 def show_sources_menu(chat_id, message_id):
     markup = InlineKeyboardMarkup()
     markup.row(
@@ -566,23 +579,19 @@ def show_sources_menu(chat_id, message_id):
         InlineKeyboardButton("❌ Remove Source", callback_data="del_src_list")
     )
     markup.row(InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu"))
-    
-    # List active sources
+
     sources = database.get_sources()
-    src_text = ""
-    if not sources:
-        src_text = "\n<i>No sources registered yet.</i>"
-    else:
-        for s in sources:
-            src_text += f"\n• [{s['team_tag']}] <b>{s['type'].upper()}</b>: <code>{html.escape(s['value'])}</code>"
-            
-    bot.edit_message_text(
-        f"📁 <b>Sources Manager</b>\n{src_text}",
-        chat_id,
-        message_id,
-        reply_markup=markup,
-        parse_mode='HTML'
-    )
+
+    # Keep the menu message itself short (with the buttons); the full list is sent
+    # separately and chunked, so it never hits Telegram's per-message length limit.
+    header = (f"📁 <b>Sources Manager</b>\n{len(sources)} source(s) registered."
+              if sources else "📁 <b>Sources Manager</b>\n<i>No sources registered yet.</i>")
+    bot.edit_message_text(header, chat_id, message_id, reply_markup=markup, parse_mode='HTML')
+
+    if sources:
+        lines = [f"• [{s['team_tag']}] <b>{s['type'].upper()}</b>: <code>{html.escape(s['value'])}</code>\n"
+                 for s in sources]
+        _send_chunked_lines(chat_id, lines)
 
 def show_add_source_types(chat_id, message_id):
     markup = InlineKeyboardMarkup()
