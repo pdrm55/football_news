@@ -69,7 +69,8 @@ def _patch_drission_websocket():
 
 class XScraper:
     """Handles fetching tweets from X (Twitter) using Twikit.
-    Falls back to a Simulator Mode if credentials are missing or login fails.
+    If credentials are missing or login fails, live ingestion is disabled and NO
+    tweets are produced. This scraper never fabricates/simulates tweet data.
     """
     def __init__(self):
         self.username = config.X_USERNAME
@@ -108,10 +109,10 @@ class XScraper:
                     self.mock_mode = False
                     logger.info("Successfully logged in to X and saved session to cookies.json.")
             except Exception as e:
-                logger.error(f"X login/verification failed: {e}. Falling back to Simulator Mode.")
+                logger.error(f"X login/verification failed: {e}. X live ingestion disabled (no tweets will be produced).")
                 self.mock_mode = True
         else:
-            logger.info("X credentials not fully provided. Running X Scraper in Simulator Mode.")
+            logger.info("X credentials not fully provided. X live ingestion disabled (no tweets will be produced).")
             self.mock_mode = True
 
     def get_latest_tweets(self, account_handle: str, team_tag: str, limit: int = 3):
@@ -809,7 +810,7 @@ def auto_detect_source_classification(url: str) -> tuple[str, str, str]:
 
 
 def fetch_google_news(team_query: str) -> list[dict]:
-    """Simulates searching all of the internet by parsing Google News RSS feed for the query."""
+    """Searches Google News via its RSS feed for the query. Returns real RSS entries only (no synthetic data)."""
     encoded_query = urllib.parse.quote_plus(team_query)
     feed_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=en-US&gl=US&ceid=US:en"
     
