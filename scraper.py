@@ -1166,7 +1166,13 @@ def run_scraper_ingestion(x_scraper=None):
                                     
                             title, content, image_url = parse_article_html(art_html)
                             if title or content:
-                                detected_team = detect_team_from_text(title, content, team_tag)
+                                # allow_fallback=False: author/section pages carry off-club and
+                                # off-topic items (e.g. a tennis story on a football author page),
+                                # so only keep articles whose text actually matches the club.
+                                detected_team = detect_team_from_text(title, content, team_tag, allow_fallback=False)
+                                if not detected_team:
+                                    logger.info(f"Protected article '{art_url}' does not match club '{team_tag}'; skipping.")
+                                    continue
                                 database.save_article(source_id, art_url, title, content, image_url, detected_team)
                                 
                     # Sequential sleep to avoid rate limiting and VPS RAM spikes
