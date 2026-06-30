@@ -325,7 +325,7 @@ def scheduler_loop():
             if config.X_USERNAME:
                 if x_scraper.mock_mode:
                     if not cookie_alert_sent:
-                        logger.warning("X Scraper fell back to Mock mode. Sending cookie alert to admin...")
+                        logger.warning("X live session unavailable. Sending cookie alert to admin...")
                         try:
                             bot.send_message(
                                 chat_id=config.ADMIN_USER_ID,
@@ -966,7 +966,7 @@ def save_new_ct0(message, username, password, email, auth_token):
             bot.send_message(
                 message.chat.id, 
                 "❌ Authentication error: Twitter blocked the connection for the new account.\n"
-                "The bot fell back to Simulator (Mock) mode. Please re-check the account details and cookie validity."
+                "X live ingestion is now disabled (no tweets will be posted). Please re-check the account details and cookie validity."
             )
         else:
             bot.send_message(message.chat.id, "✅ Success: Live connection established with the new account!")
@@ -1044,7 +1044,7 @@ def save_ct0(message, auth_token):
             bot.send_message(
                 message.chat.id, 
                 "❌ Authentication error: Twitter blocked the connection with these cookies.\n"
-                "The bot will remain in Simulator (Mock) mode. Please check the cookies and try again."
+                "X live ingestion will stay disabled (no tweets will be posted). Please check the cookies and try again."
             )
         else:
             bot.send_message(message.chat.id, "✅ Success: Live login established! The X session is working correctly.")
@@ -1103,9 +1103,9 @@ def run_preflight_checks() -> bool:
         x_client = scraper.XScraper()
         if x_client.mock_mode:
             if config.X_USERNAME:
-                print("  ⚠️  X Scraper Warn: Live login failed. Running in Simulator Mode.")
+                print("  ⚠️  X Scraper Warn: Live login failed. X ingestion disabled (no tweets produced).")
             else:
-                print("  ℹ️  X Scraper Status: Running in Simulator Mode (no credentials).")
+                print("  ℹ️  X Scraper Status: X ingestion disabled (no credentials, no tweets produced).")
         else:
             print("  ✅ X Scraper OK: Successfully authenticated using cookies.json.")
     except Exception as e:
