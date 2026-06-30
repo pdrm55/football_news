@@ -290,8 +290,12 @@ def delete_old_articles(days: int = None) -> int:
 
 # CRUD for TikTok Monitor
 def add_tiktok_account(handle: str) -> bool:
-    """Adds a TikTok creator (handle stored without '@'). Returns False if it exists."""
-    handle = handle.strip().lstrip('@').lower()
+    """Adds a TikTok creator (handle stored without '@'). Returns False if it exists.
+    Defensively strips a leading '@', any URL prefix, and a trailing ?query/path."""
+    handle = handle.strip()
+    if '/@' in handle:
+        handle = handle.split('/@', 1)[1]
+    handle = handle.lstrip('@').split('?', 1)[0].split('/', 1)[0].strip().lower()
     if not handle:
         return False
     try:
