@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import time
 import random
@@ -27,6 +28,19 @@ PROTECTED_DOMAINS = [
     'dailymail.com', 'dailymail.co.uk', 'thesun.co.uk', 'skysports.com',
     'liverpoolecho.co.uk', 'mirror.co.uk'
 ]
+
+# Domains that are not Cloudflare-blocked but render their article feed with
+# client-side JavaScript, so plain requests returns no article links. These are
+# routed through the headless-browser (DrissionPage) path just like protected sites.
+JS_RENDERED_DOMAINS = [
+    'goal.com', 'sports.yahoo.com'
+]
+
+
+def _needs_browser(domain: str) -> bool:
+    """True if the domain needs a headless browser (Cloudflare-protected or JS-rendered)."""
+    domain = (domain or '').lower()
+    return any(d in domain for d in PROTECTED_DOMAINS) or any(d in domain for d in JS_RENDERED_DOMAINS)
 
 class XScraper:
     """Handles fetching tweets from X (Twitter) using Twikit.
@@ -550,6 +564,19 @@ def _is_article_url(author_domain: str, url_path: str) -> bool:
             return False
         return len(parts) == 1 and '-' in parts[0]
 
+    if 'football.london' in author_domain:
+        # Reach plc article: /<club>-fc/<section>/<slug>-<numeric-id>
+        return bool(re.search(r'-\d{6,}$', url_path.rstrip('/')))
+
+    if 'goal.com' in author_domain:
+        # Goal article: /<locale>/lists/<slug>/blt<alphanumeric-id>
+        parts = [p for p in url_path.split('/') if p]
+        return any(p.startswith('blt') for p in parts)
+
+    if 'sports.yahoo.com' in author_domain:
+        # Yahoo article: /articles/<slug>-<numeric-id>.html
+        return '/articles/' in url_path and url_path.endswith('.html')
+
     # Fallback for Reach plc (liverpoolecho, mirror) and other domains.
     # Reach hosts betting/affiliate content under /sport/ too, so exclude it explicitly.
     _BETTING = ('betting', 'odds', 'free-bet', 'free-bets', 'bookmaker', 'bet365',
@@ -571,7 +598,7 @@ def extract_articles_from_author_page(author_url: str, html_text: str) -> list[s
     if not html_text:
         return []
 
-    from urllib.parse import urljoin, urlparse
+    from urllib.parse import urljoin, urlparse, urldefrag
 
     soup = BeautifulSoup(html_text, 'html.parser')
     parsed_author = urlparse(author_url)
@@ -588,7 +615,7 @@ def extract_articles_from_author_page(author_url: str, html_text: str) -> list[s
             if not href or href.startswith('#') or href.startswith('javascript:'):
                 continue
 
-            full_url = urljoin(author_url, href)
+            full_url = urldefrag(urljoin(author_url, href))[0]  # drop #fragments
             parsed_url = urlparse(full_url)
 
             # Stay on the same domain and skip the author/topic landing page itself.
@@ -952,7 +979,7 @@ def run_scraper_ingestion(x_scraper=None):
             from urllib.parse import urlparse
             parsed_url = urlparse(src['value'])
             domain = parsed_url.netloc.lower()
-            if any(d in domain for d in PROTECTED_DOMAINS):
+            if _needs_browser(domain):
                 protected_web_sources.append(src)
                 continue
         regular_sources.append(src)
@@ -1312,7 +1339,7 @@ def diagnose_source(url: str, team_tag: str | None = None, deep_limit: int = 3) 
         return "\n".join(out)
 
     # --- web_link / feed page ---
-    is_protected = any(d in domain for d in PROTECTED_DOMAINS)
+    is_protected = _needs_browser(domain)
     page = None
     try:
         if is_protected:
