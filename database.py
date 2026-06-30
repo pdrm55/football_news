@@ -127,7 +127,26 @@ def init_db():
             
         # Create status index for fast lookups
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_articles_status ON news_articles(status)")
-            
+
+        # TikTok Monitor tables (independent of the news pipeline)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tiktok_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                handle TEXT UNIQUE NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tiktok_seen_videos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                handle TEXT NOT NULL,
+                video_id TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(handle, video_id)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_tt_seen ON tiktok_seen_videos(handle, video_id)")
+
     logger.info("Database initialized successfully.")
 
 # CRUD for Sources
@@ -267,3 +286,57 @@ def delete_old_articles(days: int = None) -> int:
         if deleted_count > 0:
             logger.info(f"Purged {deleted_count} old sent/skipped articles older than {days} days.")
         return deleted_count
+
+
+# CRUD for TikTok Monitor
+def add_tiktok_account(handle: str) -> bool:
+    """Adds a TikTok creator (handle stored without '@'). Returns False if it exists."""
+    handle = handle.strip().lstrip('@').lower()
+    if not handle:
+        return False
+    try:
+        with get_db() as conn:
+            conn.cursor().execute("INSERT INTO tiktok_accounts (handle) VALUES (?)", (handle,))
+            return True
+    except sqlite3.IntegrityError:
+        return False
+
+def remove_tiktok_account(account_id: int) -> bool:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM tiktok_accounts WHERE id = ?", (account_id,))
+        return cursor.rowcount > 0
+
+def get_tiktok_accounts():
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM tiktok_accounts ORDER BY handle")
+        return [dict(row) for row in cursor.fetchall()]
+
+def is_tiktok_video_seen(handle: str, video_id: str) -> bool:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM tiktok_seen_videos WHERE handle = ? AND video_id = ?",
+            (handle.lower(), str(video_id))
+        )
+        return cursor.fetchone() is not None
+
+def mark_tiktok_video_seen(handle: str, video_id: str):
+    try:
+        with get_db() as conn:
+            conn.cursor().execute(
+                "INSERT OR IGNORE INTO tiktok_seen_videos (handle, video_id) VALUES (?, ?)",
+                (handle.lower(), str(video_id))
+            )
+    except sqlite3.IntegrityError:
+        pass
+
+def prune_tiktok_seen(days: int = 30) -> int:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM tiktok_seen_videos WHERE created_at < datetime('now', ?)",
+            (f"-{days} days",)
+        )
+        return cursor.rowcount
