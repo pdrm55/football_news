@@ -19,6 +19,21 @@ import database
 logger = logging.getLogger("tiktok")
 
 
+def normalize_handle(text: str) -> str:
+    """Extracts a clean TikTok handle from a full URL, an @handle, or a bare handle.
+    Strips the scheme/host, a leading '@', any query string (?_r=...&_t=...) or path/slash,
+    and lowercases. e.g. 'https://www.tiktok.com/@vago.int?_r=1&_t=...' -> 'vago.int'."""
+    if not text:
+        return ""
+    h = text.strip()
+    if '/@' in h:                 # full URL form: .../@handle...
+        h = h.split('/@', 1)[1]
+    h = h.lstrip('@')
+    h = h.split('?', 1)[0]        # drop query string
+    h = h.split('/', 1)[0]        # drop any trailing path
+    return h.strip().lower()
+
+
 # --- Fetch layer (the single pluggable point; swap for a paid API if needed) ---
 def fetch_latest_videos(handle: str, limit: int = None) -> list[dict]:
     """Returns the latest videos for a creator as [{video_id, url, title}], newest first.
