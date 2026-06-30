@@ -36,6 +36,12 @@ X_EMAIL = os.getenv("X_EMAIL")
 # Optional Proxy Configuration for Twikit (HTTP/SOCKS5)
 PROXY_URL = os.getenv("PROXY_URL")
 
+# TikTok Monitor module configuration
+# Where TikTok videos are posted. Defaults to the main chat; set TIKTOK_THREAD_ID to a
+# dedicated "TikTok" forum topic in the same group.
+TIKTOK_CHAT_ID = os.getenv("TIKTOK_CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID")
+TIKTOK_THREAD_ID = os.getenv("TIKTOK_THREAD_ID")
+
 # Parse Admin User ID(s)
 ADMIN_USER_IDS = []
 ADMIN_USER_ID = None
@@ -61,6 +67,7 @@ def _parse_thread_id(val):
 THREAD_ID_ARSENAL = _parse_thread_id(THREAD_ID_ARSENAL)
 THREAD_ID_LIVERPOOL = _parse_thread_id(THREAD_ID_LIVERPOOL)
 THREAD_ID_INTER = _parse_thread_id(THREAD_ID_INTER)
+TIKTOK_THREAD_ID = _parse_thread_id(TIKTOK_THREAD_ID)
 
 # Validation check
 missing_vars = []
@@ -86,3 +93,9 @@ SCHEDULER_CYCLE_SECONDS = 600  # 10 minutes loop
 MAX_BATCH_SIZE = 30            # Max pending articles to process in one cycle
 MAX_BACKLOG = 15               # Max backlog articles to process on startup
 DB_RETENTION_DAYS = 7          # DB retention policy period
+
+# TikTok Monitor parameters
+TIKTOK_CYCLE_SECONDS = 600     # Polling interval for the TikTok monitor loop
+TIKTOK_FETCH_LIMIT = 5         # How many latest videos to check per creator per cycle
+TIKTOK_MAX_VIDEO_MB = 49       # Max size to upload natively (Telegram bot limit is 50MB)
+TIKTOK_SEEN_RETENTION_DAYS = 30  # Prune tiktok_seen_videos older than this
