@@ -327,9 +327,9 @@ def scheduler_loop():
                             bot.send_message(
                                 chat_id=config.ADMIN_USER_ID,
                                 text=(
-                                    "⚠️ **هشدار امنیتی X (Twitter):**\n"
-                                    "نشست کوکی‌های X منقضی شده یا با شکست مواجه شده است. خزش زنده متوقف گردید.\n"
-                                    "لطفاً از طریق دکمه `Update X Cookies` در منوی `/settings` ربات، کوکی‌های جدید را ثبت کنید."
+                                    "⚠️ *X (Twitter) Security Alert:*\n"
+                                    "The X cookie session has expired or failed. Live crawling has stopped.\n"
+                                    "Please register fresh cookies via the `Update X Cookies` button in the bot's `/settings` menu."
                                 ),
                                 parse_mode='Markdown'
                             )
@@ -389,6 +389,9 @@ def get_main_menu_markup():
     markup.row(
         InlineKeyboardButton("👤 Switch X Account", callback_data="switch_x_account")
     )
+    markup.row(
+        InlineKeyboardButton("🧪 Test a Source URL", callback_data="test_source")
+    )
     return markup
 
 
@@ -441,7 +444,21 @@ def handle_callbacks(call):
         
     elif data == "switch_x_account":
         prompt_new_username(chat_id)
-        
+
+    elif data == "test_source":
+        prompt_test_url(chat_id)
+
+    elif data.startswith("test_run_"):
+        team = data.replace("test_run_", "")
+        url = pending_test_url.pop(chat_id, None)
+        if not url:
+            bot.answer_callback_query(call.id, "Session expired, please start again.")
+            send_main_menu(chat_id)
+        else:
+            team_tag = None if team == "none" else team
+            bot.answer_callback_query(call.id, "Testing source, please wait...")
+            threading.Thread(target=run_source_test, args=(chat_id, url, team_tag)).start()
+
     elif data == "add_src_type":
         show_add_source_types(chat_id, message_id)
         
@@ -486,6 +503,60 @@ def run_manual_cycle(chat_id):
         bot.send_message(chat_id, "✅ Scraper ingestion and AI pipeline run completed.")
     except Exception as e:
         bot.send_message(chat_id, f"❌ Manual scraper run failed: {e}")
+
+# Test Source (read-only dry run) Flow
+pending_test_url = {}
+
+def prompt_test_url(chat_id):
+    msg = bot.send_message(
+        chat_id,
+        "🧪 *Test a Source URL*\n\n"
+        "Send the URL you want to test (RSS feed, web/journalist/team page).\n"
+        "This is a read-only dry run, nothing is saved or posted.\n\n"
+        "Or type /cancel to abort.",
+        parse_mode='Markdown'
+    )
+    bot.register_next_step_handler(msg, save_test_url)
+
+def save_test_url(message):
+    url = (message.text or "").strip()
+    if url.lower() == '/cancel':
+        bot.send_message(message.chat.id, "❌ Cancelled.")
+        send_main_menu(message.chat.id)
+        return
+    if not url.startswith('http'):
+        bot.send_message(message.chat.id, "❌ Invalid URL (must start with http/https). Cancelled.")
+        send_main_menu(message.chat.id)
+        return
+
+    pending_test_url[message.chat.id] = url
+    markup = InlineKeyboardMarkup()
+    markup.row(
+        InlineKeyboardButton("🔴 Arsenal", callback_data="test_run_Arsenal"),
+        InlineKeyboardButton("🔴 Liverpool", callback_data="test_run_Liverpool"),
+        InlineKeyboardButton("🔵 Inter", callback_data="test_run_Inter")
+    )
+    markup.row(InlineKeyboardButton("No club filter", callback_data="test_run_none"))
+    bot.send_message(
+        message.chat.id,
+        "Which club should this source be tested against? "
+        "(Used to check article relevance.)",
+        reply_markup=markup
+    )
+
+def run_source_test(chat_id, url, team_tag):
+    try:
+        bot.send_message(chat_id, "🧪 Running source test... (Cloudflare sites may take ~30s)")
+        report = scraper.diagnose_source(url, team_tag=team_tag)
+        # Telegram hard-limits messages to 4096 chars; send as plain text to avoid
+        # Markdown parsing errors on URLs/slugs.
+        if len(report) > 4000:
+            report = report[:4000] + "\n... (truncated)"
+        bot.send_message(chat_id, report)
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ Source test failed: {e}")
+    finally:
+        send_main_menu(chat_id)
 
 # Sources Views
 def show_sources_menu(chat_id, message_id):
@@ -717,58 +788,59 @@ def update_env_file(username, password, email):
 def prompt_new_username(chat_id):
     msg = bot.send_message(
         chat_id, 
-        "👤 **تنظیم اکانت جدید X (توییتر)**\n\n"
-        "لطفاً **نام‌کاربری جدید X** را بدون کاراکتر @ ارسال کنید:\n"
-        "(مثال: `trendia_x`)\n\n"
-        "یا بنویسید /cancel برای انصراف."
+        "👤 *Set up a new X (Twitter) account*\n\n"
+        "Please send the *new X username* without the @ character:\n"
+        "(example: `trendia_x`)\n\n"
+        "Or type /cancel to abort.",
+        parse_mode='Markdown'
     )
     bot.register_next_step_handler(msg, save_new_username)
 
 def save_new_username(message):
     val = message.text.strip()
     if val.lower() == '/cancel':
-        bot.send_message(message.chat.id, "❌ انصراف داده شد.")
+        bot.send_message(message.chat.id, "❌ Cancelled.")
         send_main_menu(message.chat.id)
         return
         
     if not val:
-        bot.send_message(message.chat.id, "❌ مقدار نامعتبر است. انصراف داده شد.")
+        bot.send_message(message.chat.id, "❌ Invalid value. Cancelled.")
         send_main_menu(message.chat.id)
         return
         
-    msg = bot.send_message(message.chat.id, "لطفاً **رمز عبور جدید X** را ارسال کنید:")
+    msg = bot.send_message(message.chat.id, "Please send the *new X password*:", parse_mode='Markdown')
     bot.register_next_step_handler(msg, save_new_password, val)
 
 def save_new_password(message, username):
     val = message.text.strip()
     if val.lower() == '/cancel':
-        bot.send_message(message.chat.id, "❌ انصراف داده شد.")
+        bot.send_message(message.chat.id, "❌ Cancelled.")
         send_main_menu(message.chat.id)
         return
         
     if not val:
-        bot.send_message(message.chat.id, "❌ مقدار نامعتبر است. انصراف داده شد.")
+        bot.send_message(message.chat.id, "❌ Invalid value. Cancelled.")
         send_main_menu(message.chat.id)
         return
         
-    msg = bot.send_message(message.chat.id, "لطفاً **ایمیل جدید مرتبط با اکانت X** را ارسال کنید:")
+    msg = bot.send_message(message.chat.id, "Please send the *email associated with the new X account*:", parse_mode='Markdown')
     bot.register_next_step_handler(msg, save_new_email, username, val)
 
 def save_new_email(message, username, password):
     val = message.text.strip()
     if val.lower() == '/cancel':
-        bot.send_message(message.chat.id, "❌ انصراف داده شد.")
+        bot.send_message(message.chat.id, "❌ Cancelled.")
         send_main_menu(message.chat.id)
         return
         
     if not val:
-        bot.send_message(message.chat.id, "❌ مقدار نامعتبر است. انصراف داده شد.")
+        bot.send_message(message.chat.id, "❌ Invalid value. Cancelled.")
         send_main_menu(message.chat.id)
         return
         
     msg = bot.send_message(
         message.chat.id, 
-        "مشخصات اکانت دریافت شد. حالا لطفاً کوکی جدید **`auth_token`** را برای این اکانت جدید ارسال کنید:",
+        "Account details received. Now please send the new `auth_token` cookie for this new account:",
         parse_mode='Markdown'
     )
     bot.register_next_step_handler(msg, save_new_auth_token, username, password, val)
@@ -776,18 +848,18 @@ def save_new_email(message, username, password):
 def save_new_auth_token(message, username, password, email):
     val = message.text.strip()
     if val.lower() == '/cancel':
-        bot.send_message(message.chat.id, "❌ انصراف داده شد.")
+        bot.send_message(message.chat.id, "❌ Cancelled.")
         send_main_menu(message.chat.id)
         return
         
     if not val:
-        bot.send_message(message.chat.id, "❌ مقدار نامعتبر است. انصراف داده شد.")
+        bot.send_message(message.chat.id, "❌ Invalid value. Cancelled.")
         send_main_menu(message.chat.id)
         return
         
     msg = bot.send_message(
         message.chat.id, 
-        "مقدار `auth_token` دریافت شد. حالا لطفاً کوکی جدید **`ct0`** را ارسال کنید:",
+        "`auth_token` received. Now please send the new `ct0` cookie:",
         parse_mode='Markdown'
     )
     bot.register_next_step_handler(msg, save_new_ct0, username, password, email, val)
@@ -795,12 +867,12 @@ def save_new_auth_token(message, username, password, email):
 def save_new_ct0(message, username, password, email, auth_token):
     ct0 = message.text.strip()
     if ct0.lower() == '/cancel':
-        bot.send_message(message.chat.id, "❌ انصراف داده شد.")
+        bot.send_message(message.chat.id, "❌ Cancelled.")
         send_main_menu(message.chat.id)
         return
         
     if not ct0:
-        bot.send_message(message.chat.id, "❌ مقدار نامعتبر است. انصراف داده شد.")
+        bot.send_message(message.chat.id, "❌ Invalid value. Cancelled.")
         send_main_menu(message.chat.id)
         return
         
@@ -826,22 +898,22 @@ def save_new_ct0(message, username, password, email, auth_token):
         
         bot.send_message(
             message.chat.id, 
-            "💾 اکانت جدید و کوکی‌ها با موفقیت روی سرور ذخیره شدند.\n"
-            "در حال تست اتصال با مشخصات جدید..."
+            "💾 The new account and cookies were saved successfully on the server.\n"
+            "Testing the connection with the new credentials..."
         )
         
         test_client = scraper.XScraper()
         if test_client.mock_mode:
             bot.send_message(
                 message.chat.id, 
-                "❌ خطای احراز هویت: توییتر اتصال اکانت جدید را مسدود کرد.\n"
-                "ربات به حالت شبیه‌ساز (Mock) بازگشت. لطفاً مشخصات اکانت و صحت کوکی‌ها را مجدداً بررسی کنید."
+                "❌ Authentication error: Twitter blocked the connection for the new account.\n"
+                "The bot fell back to Simulator (Mock) mode. Please re-check the account details and cookie validity."
             )
         else:
-            bot.send_message(message.chat.id, "✅ موفقیت: اتصال لایو با اکانت جدید برقرار شد!")
-            
+            bot.send_message(message.chat.id, "✅ Success: Live connection established with the new account!")
+
     except Exception as e:
-        bot.send_message(message.chat.id, f"❌ خطا در اعمال تنظیمات جدید: {e}")
+        bot.send_message(message.chat.id, f"❌ Failed to apply the new settings: {e}")
         
     send_main_menu(message.chat.id)
 
@@ -849,9 +921,9 @@ def save_new_ct0(message, username, password, email, auth_token):
 def prompt_auth_token(chat_id):
     msg = bot.send_message(
         chat_id, 
-        "لطفاً مقدار جدید **`auth_token`** را برای توییتر ارسال کنید:\n"
-        "(مثال: `4a800d70d277f3da...`)\n\n"
-        "ارسال کنید یا بنویسید /cancel برای انصراف.",
+        "Please send the new `auth_token` value for Twitter:\n"
+        "(example: `4a800d70d277f3da...`)\n\n"
+        "Send it, or type /cancel to abort.",
         parse_mode='Markdown'
     )
     bot.register_next_step_handler(msg, save_auth_token)
@@ -859,21 +931,21 @@ def prompt_auth_token(chat_id):
 def save_auth_token(message):
     token = message.text.strip()
     if token.lower() == '/cancel':
-        bot.send_message(message.chat.id, "❌ فرآیند بروزرسانی لغو شد.")
+        bot.send_message(message.chat.id, "❌ Update process cancelled.")
         send_main_menu(message.chat.id)
         return
         
     if not token:
-        bot.send_message(message.chat.id, "❌ مقدار نامعتبر است. عملیات لغو شد.")
+        bot.send_message(message.chat.id, "❌ Invalid value. Operation cancelled.")
         send_main_menu(message.chat.id)
         return
         
     msg = bot.send_message(
         message.chat.id, 
-        "مقدار `auth_token` دریافت شد.\n"
-        "حالا لطفاً مقدار جدید **`ct0`** را ارسال کنید:\n"
-        "(مثال: `92c20e279c...`)\n\n"
-        "ارسال کنید یا بنویسید /cancel برای انصراف.",
+        "`auth_token` received.\n"
+        "Now please send the new `ct0` value:\n"
+        "(example: `92c20e279c...`)\n\n"
+        "Send it, or type /cancel to abort.",
         parse_mode='Markdown'
     )
     bot.register_next_step_handler(msg, save_ct0, token)
@@ -881,12 +953,12 @@ def save_auth_token(message):
 def save_ct0(message, auth_token):
     ct0 = message.text.strip()
     if ct0.lower() == '/cancel':
-        bot.send_message(message.chat.id, "❌ فرآیند بروزرسانی لغو شد.")
+        bot.send_message(message.chat.id, "❌ Update process cancelled.")
         send_main_menu(message.chat.id)
         return
         
     if not ct0:
-        bot.send_message(message.chat.id, "❌ مقدار نامعتبر است. عملیات لغو شد.")
+        bot.send_message(message.chat.id, "❌ Invalid value. Operation cancelled.")
         send_main_menu(message.chat.id)
         return
         
@@ -901,20 +973,20 @@ def save_ct0(message, auth_token):
         client.set_cookies(cookies_data)
         client.save_cookies("cookies.json")
             
-        bot.send_message(message.chat.id, "💾 فایل `cookies.json` با موفقیت روی سرور بروزرسانی شد.\nدر حال تست اتصال زنده...")
+        bot.send_message(message.chat.id, "💾 `cookies.json` was updated successfully on the server.\nTesting the live connection...")
         
         # Test the connection immediately
         test_client = scraper.XScraper()
         if test_client.mock_mode:
             bot.send_message(
                 message.chat.id, 
-                "❌ خطای احراز هویت: توییتر اتصال با این کوکی‌ها را مسدود کرد.\n"
-                "ربات همچنان در حالت شبیه‌ساز (Mock) خواهد بود. لطفاً کوکی‌ها را بررسی و مجدداً تلاش کنید."
+                "❌ Authentication error: Twitter blocked the connection with these cookies.\n"
+                "The bot will remain in Simulator (Mock) mode. Please check the cookies and try again."
             )
         else:
-            bot.send_message(message.chat.id, "✅ موفقیت: لاگین زنده برقرار شد! نشست X به درستی کار می‌کند.")
+            bot.send_message(message.chat.id, "✅ Success: Live login established! The X session is working correctly.")
     except Exception as e:
-        bot.send_message(message.chat.id, f"❌ خطا در نوشتن فایل کوکی‌ها: {e}")
+        bot.send_message(message.chat.id, f"❌ Failed to write the cookies file: {e}")
         
     send_main_menu(message.chat.id)
 
