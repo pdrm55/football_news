@@ -13,6 +13,7 @@ from telebot.types import (
 import config
 import database
 import scraper
+import tiktok_monitor
 
 # Initialize logging
 logger = logging.getLogger("bot")
@@ -426,6 +427,9 @@ def get_main_menu_markup():
     markup.row(
         InlineKeyboardButton("🧪 Test a Source URL", callback_data="test_source")
     )
+    markup.row(
+        InlineKeyboardButton("🎵 TikTok Monitor", callback_data="tt_menu")
+    )
     return markup
 
 
@@ -529,6 +533,25 @@ def handle_callbacks(call):
         bot.answer_callback_query(call.id, "Filter keyword removed.")
         show_remove_filter_list(chat_id, message_id)
 
+    # --- TikTok Monitor ---
+    elif data == "tt_menu":
+        show_tiktok_menu(chat_id, message_id)
+
+    elif data == "tt_add":
+        prompt_tiktok_account(chat_id)
+
+    elif data == "tt_test":
+        prompt_tiktok_test(chat_id)
+
+    elif data == "tt_del_list":
+        show_remove_tiktok_list(chat_id, message_id)
+
+    elif data.startswith("tt_del_do_"):
+        aid = int(data.replace("tt_del_do_", ""))
+        database.remove_tiktok_account(aid)
+        bot.answer_callback_query(call.id, "TikTok account removed.")
+        show_remove_tiktok_list(chat_id, message_id)
+
 # Manual Execution Function
 def run_manual_cycle(chat_id):
     try:
@@ -593,6 +616,105 @@ def run_source_test(chat_id, url, team_tag):
         bot.send_message(chat_id, f"❌ Source test failed: {e}")
     finally:
         send_main_menu(chat_id)
+
+# TikTok Monitor Views & Flows
+def show_tiktok_menu(chat_id, message_id):
+    markup = InlineKeyboardMarkup()
+    markup.row(
+        InlineKeyboardButton("➕ Add Account", callback_data="tt_add"),
+        InlineKeyboardButton("❌ Remove Account", callback_data="tt_del_list")
+    )
+    markup.row(InlineKeyboardButton("🧪 Test an Account", callback_data="tt_test"))
+    markup.row(InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu"))
+
+    accounts = database.get_tiktok_accounts()
+    if accounts:
+        body = "\n".join(f"• <code>@{html.escape(a['handle'])}</code>" for a in accounts)
+        text = f"🎵 <b>TikTok Monitor</b>\n{len(accounts)} account(s) monitored:\n{body}"
+    else:
+        text = "🎵 <b>TikTok Monitor</b>\n<i>No accounts monitored yet.</i>"
+    if len(text) > 3900:
+        text = text[:3900] + "\n…"
+    bot.edit_message_text(text, chat_id, message_id, reply_markup=markup, parse_mode='HTML')
+
+def show_remove_tiktok_list(chat_id, message_id):
+    accounts = database.get_tiktok_accounts()
+    markup = InlineKeyboardMarkup()
+    if not accounts:
+        markup.row(InlineKeyboardButton("🔙 Back", callback_data="tt_menu"))
+        bot.edit_message_text("No TikTok accounts to remove.", chat_id, message_id, reply_markup=markup)
+        return
+    for a in accounts:
+        markup.row(InlineKeyboardButton(f"❌ @{a['handle']}", callback_data=f"tt_del_do_{a['id']}"))
+    markup.row(InlineKeyboardButton("🔙 Back", callback_data="tt_menu"))
+    bot.edit_message_text("Select a TikTok account to remove:", chat_id, message_id, reply_markup=markup)
+
+def prompt_tiktok_account(chat_id):
+    msg = bot.send_message(
+        chat_id,
+        "🎵 *Add a TikTok account to monitor*\n\n"
+        "Send the creator's handle (with or without @), e.g. `khaby.lame`.\n"
+        "Only videos posted *after* you add it will be alerted.\n\n"
+        "Or type /cancel to abort.",
+        parse_mode='Markdown'
+    )
+    bot.register_next_step_handler(msg, save_tiktok_account)
+
+def save_tiktok_account(message):
+    if menu_button_interrupt(message):
+        return
+    val = (message.text or "").strip()
+    if val.lower() == '/cancel':
+        bot.send_message(message.chat.id, "❌ Cancelled.")
+        send_main_menu(message.chat.id)
+        return
+    handle = val.lstrip('@').strip()
+    if not handle:
+        bot.send_message(message.chat.id, "❌ Invalid handle. Cancelled.")
+        send_main_menu(message.chat.id)
+        return
+
+    if database.add_tiktok_account(handle):
+        bot.send_message(message.chat.id, f"✅ Now monitoring TikTok @{handle}.\nSetting baseline (existing videos won't be re-posted)…")
+        try:
+            n = tiktok_monitor.seed_account_baseline(handle)
+            bot.send_message(message.chat.id, f"📌 Baseline set ({n} current videos marked as seen). New posts will be alerted.")
+        except Exception as e:
+            bot.send_message(message.chat.id, f"⚠️ Added, but could not set baseline now: {e}")
+    else:
+        bot.send_message(message.chat.id, f"❌ @{handle} is already monitored (or invalid).")
+    send_main_menu(message.chat.id)
+
+def prompt_tiktok_test(chat_id):
+    msg = bot.send_message(
+        chat_id,
+        "🧪 *Test a TikTok account*\n\n"
+        "Send a handle to dry-run: the bot lists the latest videos it can see "
+        "(nothing is downloaded or posted).\n\nOr type /cancel to abort.",
+        parse_mode='Markdown'
+    )
+    bot.register_next_step_handler(msg, run_tiktok_test)
+
+def run_tiktok_test(message):
+    if menu_button_interrupt(message):
+        return
+    val = (message.text or "").strip()
+    if val.lower() == '/cancel' or not val:
+        bot.send_message(message.chat.id, "❌ Cancelled.")
+        send_main_menu(message.chat.id)
+        return
+    handle = val.lstrip('@').strip()
+    bot.send_message(message.chat.id, f"🧪 Checking @{handle}…")
+    try:
+        vids = tiktok_monitor.fetch_latest_videos(handle)
+        if vids:
+            lines = "\n".join(f"• {v['url']}" for v in vids)
+            bot.send_message(message.chat.id, f"Found {len(vids)} recent video(s) for @{handle}:\n{lines}")
+        else:
+            bot.send_message(message.chat.id, f"No videos found for @{handle} (private, wrong handle, or TikTok blocked the request).")
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ Test failed: {e}")
+    send_main_menu(message.chat.id)
 
 # Sources Views
 def _send_chunked_lines(chat_id, lines, limit=3900):
@@ -1131,7 +1253,11 @@ if __name__ == "__main__":
     # 3. Launch Background Scheduler Loop in a separate thread
     scheduler_t = threading.Thread(target=scheduler_loop, daemon=True)
     scheduler_t.start()
-    
+
+    # 3b. Launch the isolated TikTok monitor loop in its own thread
+    tiktok_t = threading.Thread(target=tiktok_monitor.tiktok_loop, args=(bot,), daemon=True)
+    tiktok_t.start()
+
     # 4. Start Telegram Long Polling
     logger.info("Bot starting Telegram Long-Polling...")
     bot.infinity_polling()
