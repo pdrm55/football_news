@@ -468,10 +468,10 @@ def handle_callbacks(call):
         show_add_source_teams(chat_id, message_id, stype)
         
     elif data.startswith("add_src_p_"):
-        # Format: add_src_p_{type}_{team}
-        parts = data.replace("add_src_p_", "").split("_", 1)
-        stype = parts[0]
-        team = parts[1]
+        # Format: add_src_p_{type}_{team}. The type can contain an underscore
+        # (web_link, x_account) while the team never does, so split on the LAST
+        # underscore. Using split() here broke web_link/x_account selection.
+        stype, team = data.replace("add_src_p_", "").rsplit("_", 1)
         prompt_source_value(chat_id, stype, team)
         
     elif data == "del_src_list":
