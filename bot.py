@@ -653,7 +653,8 @@ def prompt_tiktok_account(chat_id):
     msg = bot.send_message(
         chat_id,
         "🎵 *Add a TikTok account to monitor*\n\n"
-        "Send the creator's handle (with or without @), e.g. `khaby.lame`.\n"
+        "Send the creator's handle or full profile URL — e.g. `khaby.lame`, "
+        "`@khaby.lame`, or `https://www.tiktok.com/@khaby.lame`.\n"
         "Only videos posted *after* you add it will be alerted.\n\n"
         "Or type /cancel to abort.",
         parse_mode='Markdown'
@@ -668,7 +669,7 @@ def save_tiktok_account(message):
         bot.send_message(message.chat.id, "❌ Cancelled.")
         send_main_menu(message.chat.id)
         return
-    handle = val.lstrip('@').strip()
+    handle = tiktok_monitor.normalize_handle(val)
     if not handle:
         bot.send_message(message.chat.id, "❌ Invalid handle. Cancelled.")
         send_main_menu(message.chat.id)
@@ -703,7 +704,7 @@ def run_tiktok_test(message):
         bot.send_message(message.chat.id, "❌ Cancelled.")
         send_main_menu(message.chat.id)
         return
-    handle = val.lstrip('@').strip()
+    handle = tiktok_monitor.normalize_handle(val)
     bot.send_message(message.chat.id, f"🧪 Checking @{handle}…")
     try:
         vids = tiktok_monitor.fetch_latest_videos(handle)
