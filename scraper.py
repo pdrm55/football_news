@@ -42,6 +42,31 @@ def _needs_browser(domain: str) -> bool:
     domain = (domain or '').lower()
     return any(d in domain for d in PROTECTED_DOMAINS) or any(d in domain for d in JS_RENDERED_DOMAINS)
 
+
+_drission_patched = False
+
+def _patch_drission_websocket():
+    """Chrome 132+ rejects DevTools WebSocket connections whose Host header is an IP
+    address (it returns HTTP 404 on the handshake). DrissionPage 4.1.1.4 connects via
+    127.0.0.1, so we force the Host header to 'localhost'. Without this, all headless
+    Chromium scraping fails on modern Chrome. Idempotent."""
+    global _drission_patched
+    if _drission_patched:
+        return
+    try:
+        import DrissionPage._base.driver as drv
+        _orig_create_connection = drv.create_connection
+
+        def _patched_create_connection(url, **kwargs):
+            kwargs.setdefault('host', 'localhost')
+            return _orig_create_connection(url, **kwargs)
+
+        drv.create_connection = _patched_create_connection
+        _drission_patched = True
+        logger.info("Applied DrissionPage WebSocket Host-header patch (Chrome 132+ compatibility).")
+    except Exception as e:
+        logger.warning(f"Could not patch DrissionPage WebSocket: {e}")
+
 class XScraper:
     """Handles fetching tweets from X (Twitter) using Twikit.
     Falls back to a Simulator Mode if credentials are missing or login fails.
@@ -432,7 +457,7 @@ _FEED_CONTAINER_SELECTORS = {
     'teamtalk.com': ['.archive-list', '.posts', 'main', '#main', '.site-main'],
     'dailymail.co.uk': ['.author-articles', '#content', 'main'],
     'dailymail.com': ['.author-articles', '#content', 'main'],
-    'telegraph.co.uk': ['.card-grid', 'main'],
+    'telegraph.co.uk': ['.card-grid', '.card__content', 'main'],
     'theguardian.com': ['#maincontent', 'main'],
     'independent.co.uk': ['.author-page', 'main'],
     'standard.co.uk': ['main'],
@@ -460,12 +485,20 @@ _NOISE_KEYWORDS = (
 def _decompose_noise(soup) -> None:
     """Strips header/footer/nav/aside and promo/trending/related widgets from the soup,
     in place, so that even fallback link scanning stays inside real content."""
+    # Never decompose structural roots: sites put feature-flag classes (e.g.
+    # 'subscribe', 'logged-in') on <html>/<body>, which would otherwise match a
+    # noise keyword and wipe out the entire document.
+    _skip = ('html', 'body', 'main')
     targets = list(soup.find_all(_NOISE_TAGS))
     for el in soup.find_all(attrs={'class': True}):
+        if el.name in _skip:
+            continue
         classes = ' '.join(el.get('class', [])).lower()
         if any(kw in classes for kw in _NOISE_KEYWORDS):
             targets.append(el)
     for el in soup.find_all(attrs={'id': True}):
+        if el.name in _skip:
+            continue
         if any(kw in (el.get('id') or '').lower() for kw in _NOISE_KEYWORDS):
             targets.append(el)
     for el in targets:
@@ -501,11 +534,14 @@ def _resolve_feed_containers(soup, author_domain: str) -> list:
     if containers:
         return containers
 
-    # No container matched. For an unknown small site, scan the de-noised document;
-    # for a known big portal, return nothing to avoid whole-site harvesting.
-    if is_known_portal:
-        logger.warning(f"No feed container matched for known portal '{author_domain}'; "
-                       "skipping to avoid whole-site scraping. Selector tuning needed.")
+    # No container matched. For portals whose article-URL rule is broad or whose
+    # recirculation widgets are aggressive, scanning the whole document risks
+    # whole-site harvesting, so extract nothing instead. Other domains have a
+    # precise per-domain URL rule, so the de-noised whole document is safe.
+    _STRICT_NO_FALLBACK = ('thesun.co.uk',)
+    if any(d in author_domain for d in _STRICT_NO_FALLBACK):
+        logger.warning(f"No feed container matched for '{author_domain}'; skipping to "
+                       "avoid whole-site scraping. Selector tuning needed.")
         return []
     return [soup]
 
@@ -527,8 +563,8 @@ def _is_article_url(author_domain: str, url_path: str) -> bool:
         return url_path.endswith('.html') and '/author/' not in url_path
 
     if 'standard.co.uk' in author_domain:
-        return (not any(x in url_path for x in ('/author/', '/tag/', '/topic/', '/category/'))
-                and len(url_path.split('/')) >= 3)
+        # Standard articles: /sport/football/<slug>-b<numeric-id>.html
+        return bool(re.search(r'/sport/football/.+-b\d+\.html$', url_path))
 
     if 'dailymail.co.uk' in author_domain or 'dailymail.com' in author_domain:
         return '/article-' in url_path and url_path.endswith('.html')
@@ -1098,6 +1134,7 @@ def run_scraper_ingestion(x_scraper=None):
     # Process Cloudflare-Protected Web Sources (Throttled Headless Chromium)
     if protected_web_sources:
         logger.info(f"Starting DrissionPage batch scraping for {len(protected_web_sources)} protected sources...")
+        _patch_drission_websocket()
         from DrissionPage import ChromiumPage, ChromiumOptions
         import datetime
         
@@ -1247,6 +1284,7 @@ def run_scraper_ingestion(x_scraper=None):
 def _open_chromium():
     """Opens a headless Chromium page for testing protected domains. Returns (page, error)."""
     try:
+        _patch_drission_websocket()
         from DrissionPage import ChromiumPage, ChromiumOptions
         co = ChromiumOptions()
         co.headless(True)
@@ -1286,10 +1324,10 @@ def _which_feed_container(html_text, domain):
             return f"matched selector '{sel}'"
     if soup.select('main, [role="main"]'):
         return "matched generic <main>"
-    if is_known:
-        return ("NO container matched (known portal -> extracts nothing to avoid "
-                "whole-site scraping; selector tuning needed)")
-    return "no specific container; scanning de-noised document (unknown site)"
+    if is_known and any(d in domain for d in ('thesun.co.uk',)):
+        return ("NO container matched -> extracting nothing to avoid whole-site "
+                "scraping (selector tuning needed)")
+    return "no specific container; scanning de-noised document (filtered by URL rule)"
 
 
 def diagnose_source(url: str, team_tag: str | None = None, deep_limit: int = 3) -> str:
