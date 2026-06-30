@@ -5,7 +5,10 @@ import re
 import threading
 import html
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telebot.types import (
+    InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton,
+)
 
 import config
 import database
@@ -354,29 +357,51 @@ def scheduler_loop():
         logger.info(f"Scheduled cycle completed. Sleeping for {config.SCHEDULER_CYCLE_SECONDS} seconds.")
         time.sleep(config.SCHEDULER_CYCLE_SECONDS)
 
+# Persistent button label that opens the settings panel (tap instead of typing).
+SETTINGS_BUTTON_TEXT = "⚙️ Settings"
+
+def get_settings_keyboard():
+    """A persistent reply keyboard with a Settings button (shown to the admin)."""
+    markup = ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.row(KeyboardButton(SETTINGS_BUTTON_TEXT))
+    return markup
+
 # Telegram Command Handlers
 @bot.message_handler(commands=['start'])
 def handle_start(message):
+    reply_markup = None
+    # Show the Settings button to the admin in private chat, so they can tap it
+    # instead of typing /settings.
+    if is_admin(message.from_user.id) and message.chat.type == "private":
+        reply_markup = get_settings_keyboard()
     bot.reply_to(
         message,
         "⚽ *Football News Aggregator & Summarizer Bot*\n\n"
         "This bot runs background ingestion and broadcasts compiled news to "
         "the designated group topics. Admin configurations can be opened "
-        "in private using `/settings`.",
-        parse_mode='Markdown'
+        "in private using `/settings` or the *Settings* button below.",
+        parse_mode='Markdown',
+        reply_markup=reply_markup
     )
 
-@bot.message_handler(commands=['settings'])
-def handle_settings(message):
+def open_settings(message):
     if not is_admin(message.from_user.id):
         bot.reply_to(message, "❌ Access Denied: You are not authorized as the Administrator.")
         return
-    
+
     if message.chat.type != "private":
         bot.reply_to(message, "⚠️ The settings panel is only available in private chat.")
         return
 
     send_main_menu(message.chat.id)
+
+@bot.message_handler(commands=['settings'])
+def handle_settings(message):
+    open_settings(message)
+
+@bot.message_handler(func=lambda m: m.text == SETTINGS_BUTTON_TEXT)
+def handle_settings_button(message):
+    open_settings(message)
 
 def get_main_menu_markup():
     markup = InlineKeyboardMarkup()
