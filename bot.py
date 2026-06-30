@@ -366,6 +366,15 @@ def get_settings_keyboard():
     markup.row(KeyboardButton(SETTINGS_BUTTON_TEXT))
     return markup
 
+def menu_button_interrupt(message) -> bool:
+    """Returns True (and reopens the menu) if the user tapped the persistent Settings
+    button while a step-by-step flow was waiting for text input. This prevents the
+    button label from being saved as data (e.g. as a bogus X handle or cookie)."""
+    if (message.text or "").strip() == SETTINGS_BUTTON_TEXT:
+        open_settings(message)
+        return True
+    return False
+
 # Telegram Command Handlers
 @bot.message_handler(commands=['start'])
 def handle_start(message):
@@ -544,6 +553,8 @@ def prompt_test_url(chat_id):
     bot.register_next_step_handler(msg, save_test_url)
 
 def save_test_url(message):
+    if menu_button_interrupt(message):
+        return
     url = (message.text or "").strip()
     if url.lower() == '/cancel':
         bot.send_message(message.chat.id, "❌ Cancelled.")
@@ -658,6 +669,8 @@ def prompt_source_value(chat_id, stype, team):
     bot.register_next_step_handler(msg, save_source_input, stype, team)
 
 def save_source_input(message, stype, team):
+    if menu_button_interrupt(message):
+        return
     value = message.text.strip()
     if not value:
         bot.send_message(message.chat.id, "❌ Cancelled: Invalid/empty value.")
@@ -750,6 +763,8 @@ def prompt_filter_value(chat_id):
     bot.register_next_step_handler(msg, save_filter_input)
 
 def save_filter_input(message):
+    if menu_button_interrupt(message):
+        return
     value = message.text.strip()
     if not value:
         bot.send_message(message.chat.id, "❌ Cancelled: Invalid/empty filter.")
@@ -831,6 +846,8 @@ def prompt_new_username(chat_id):
     bot.register_next_step_handler(msg, save_new_username)
 
 def save_new_username(message):
+    if menu_button_interrupt(message):
+        return
     val = message.text.strip()
     if val.lower() == '/cancel':
         bot.send_message(message.chat.id, "❌ Cancelled.")
@@ -846,6 +863,8 @@ def save_new_username(message):
     bot.register_next_step_handler(msg, save_new_password, val)
 
 def save_new_password(message, username):
+    if menu_button_interrupt(message):
+        return
     val = message.text.strip()
     if val.lower() == '/cancel':
         bot.send_message(message.chat.id, "❌ Cancelled.")
@@ -861,6 +880,8 @@ def save_new_password(message, username):
     bot.register_next_step_handler(msg, save_new_email, username, val)
 
 def save_new_email(message, username, password):
+    if menu_button_interrupt(message):
+        return
     val = message.text.strip()
     if val.lower() == '/cancel':
         bot.send_message(message.chat.id, "❌ Cancelled.")
@@ -880,6 +901,8 @@ def save_new_email(message, username, password):
     bot.register_next_step_handler(msg, save_new_auth_token, username, password, val)
 
 def save_new_auth_token(message, username, password, email):
+    if menu_button_interrupt(message):
+        return
     val = message.text.strip()
     if val.lower() == '/cancel':
         bot.send_message(message.chat.id, "❌ Cancelled.")
@@ -899,6 +922,8 @@ def save_new_auth_token(message, username, password, email):
     bot.register_next_step_handler(msg, save_new_ct0, username, password, email, val)
 
 def save_new_ct0(message, username, password, email, auth_token):
+    if menu_button_interrupt(message):
+        return
     ct0 = message.text.strip()
     if ct0.lower() == '/cancel':
         bot.send_message(message.chat.id, "❌ Cancelled.")
@@ -963,6 +988,8 @@ def prompt_auth_token(chat_id):
     bot.register_next_step_handler(msg, save_auth_token)
 
 def save_auth_token(message):
+    if menu_button_interrupt(message):
+        return
     token = message.text.strip()
     if token.lower() == '/cancel':
         bot.send_message(message.chat.id, "❌ Update process cancelled.")
@@ -985,6 +1012,8 @@ def save_auth_token(message):
     bot.register_next_step_handler(msg, save_ct0, token)
 
 def save_ct0(message, auth_token):
+    if menu_button_interrupt(message):
+        return
     ct0 = message.text.strip()
     if ct0.lower() == '/cancel':
         bot.send_message(message.chat.id, "❌ Update process cancelled.")
