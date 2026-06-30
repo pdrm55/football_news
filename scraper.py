@@ -211,33 +211,14 @@ class XScraper:
             try:
                 return asyncio.run(_async_fetch())
             except Exception as e:
-                logger.error(f"Error fetching tweets for @{handle}: {e}. Falling back to mock data.")
-                self.mock_mode = True
+                logger.error(f"Error fetching tweets for @{handle}: {e}. Skipping this account this cycle.")
+                return []
 
-        # Mock Mode / Fallback Simulator
-        logger.info(f"[Mock Mode] Generating simulated tweets for @{handle} ({team_tag})")
-        mock_templates = [
-            "Massive update! The manager has just confirmed team news ahead of the weekend clash. Key players returning to training. 🏃‍♂️🔥 #{team_tag}",
-            "Rumors circulating about a new contract extension for our star midfielder. Talks are progressing well. Negotiations should conclude soon! ✍️⚽ #{team_tag}",
-            "Tactical breakdown of yesterday's training session shows new shape and set-piece drills being prioritized. Big match preparation in full swing. 📈🔴 #{team_tag}",
-            "Injury update: Standard scans showed no serious tear. Expected to be back on the pitch within 10-14 days. Great news for the squad! 💪🏥 #{team_tag}",
-            "Transfer update: Negotiations between clubs have advanced. Personal terms are agreed. Final paperwork is being prepared. Here we go! 🛫📰 #{team_tag}"
-        ]
-        
-        simulated = []
-        # Generate 2 simulated tweets for testing
-        for i in range(2):
-            tweet_id = f"mock_tweet_{handle}_{int(time.time())}_{i}"
-            content = random.choice(mock_templates).format(team_tag=team_tag)
-            tweet_url = f"https://x.com/{handle}/status/{tweet_id}"
-            simulated.append({
-                'id': tweet_url,
-                'title': f"Tweet update from @{handle}",
-                'content': content,
-                'media_url': "https://images.unsplash.com/photo-1508098682722-e99c43a406b2?w=500" if i == 0 else None,
-                'url': tweet_url
-            })
-        return simulated
+        # No live X session: do NOT fabricate tweets. Returning simulated content here
+        # posted fake transfer news to the channel, and because each mock id embedded a
+        # timestamp it was always "new" so the duplicate check never suppressed it.
+        logger.warning(f"X session unavailable (mock mode); skipping @{handle} instead of simulating.")
+        return []
 
 
 def extract_rss_image(entry) -> str | None:
