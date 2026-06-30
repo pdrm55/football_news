@@ -414,7 +414,8 @@ _FEED_CONTAINER_SELECTORS = {
     'skysports.com': ['.news-list', '.sdc-site-tiles', '.page__main', 'main'],
     'mirror.co.uk': ['.publication-body', '[data-component="ArticleList"]', 'main'],
     'liverpoolecho.co.uk': ['.publication-body', '[data-component="ArticleList"]', 'main'],
-    'thesun.co.uk': ['.sun-row', '.teadit', 'main'],
+    'thesun.co.uk': ['.sun-row', '.teadit', '.feed', 'main', '#content'],
+    'teamtalk.com': ['.archive-list', '.posts', 'main', '#main', '.site-main'],
     'dailymail.co.uk': ['.author-articles', '#content', 'main'],
     'dailymail.com': ['.author-articles', '#content', 'main'],
     'telegraph.co.uk': ['.card-grid', 'main'],
@@ -434,6 +435,8 @@ _NOISE_KEYWORDS = (
     'related', 'trending', 'most-read', 'most-popular', 'popular',
     'promo', 'sidebar', 'newsletter', 'subscribe', 'social', 'share',
     'recommend', 'sponsor', 'advert', 'banner', 'cookie',
+    'also-read', 'more-on', 'you-may', 'read-more', 'outbrain', 'taboola',
+    'latest', 'watch', 'video-playlist', 'editor', 'betting', 'odds',
 )
 
 
@@ -458,13 +461,18 @@ def _decompose_noise(soup) -> None:
 
 def _resolve_feed_containers(soup, author_domain: str) -> list:
     """Returns the elements that hold the article feed for a domain, after removing
-    chrome. Falls back to <main>/[role=main] and finally the whole document."""
+    chrome. Falls back to <main>/[role=main]. For known portals (those listed in
+    _FEED_CONTAINER_SELECTORS) it deliberately does NOT fall back to the whole
+    document, so a selector miss yields nothing rather than harvesting the entire
+    site (the 'scraping the whole site' problem on big portals like The Sun)."""
     _decompose_noise(soup)
 
     selectors = []
+    is_known_portal = False
     for known_domain, sels in _FEED_CONTAINER_SELECTORS.items():
         if known_domain in author_domain:
             selectors = sels
+            is_known_portal = True
             break
 
     for selector in selectors:
@@ -473,7 +481,16 @@ def _resolve_feed_containers(soup, author_domain: str) -> list:
             return containers
 
     containers = soup.select('main, [role="main"]')
-    return containers if containers else [soup]
+    if containers:
+        return containers
+
+    # No container matched. For an unknown small site, scan the de-noised document;
+    # for a known big portal, return nothing to avoid whole-site harvesting.
+    if is_known_portal:
+        logger.warning(f"No feed container matched for known portal '{author_domain}'; "
+                       "skipping to avoid whole-site scraping. Selector tuning needed.")
+        return []
+    return [soup]
 
 
 def _is_article_url(author_domain: str, url_path: str) -> bool:
@@ -508,7 +525,21 @@ def _is_article_url(author_domain: str, url_path: str) -> bool:
     if 'skysports.com' in author_domain:
         return '/football/news/' in url_path
 
-    # Fallback for Reach plc (liverpoolecho, mirror) and other domains
+    if 'teamtalk.com' in author_domain:
+        # Articles live under section slugs like /arsenal/<slug> or /news/<slug>;
+        # the final segment of a real article is a hyphenated headline slug.
+        # Exclude author/tag/category hubs, section landing pages, and pagination.
+        parts = [p for p in url_path.split('/') if p]
+        if not parts or parts[0] in ('author', 'authors', 'tag', 'tags', 'category', 'categories', 'page'):
+            return False
+        return len(parts) >= 2 and '-' in parts[-1] and 'page' not in parts
+
+    # Fallback for Reach plc (liverpoolecho, mirror) and other domains.
+    # Reach hosts betting/affiliate content under /sport/ too, so exclude it explicitly.
+    _BETTING = ('betting', 'odds', 'free-bet', 'free-bets', 'bookmaker', 'bet365',
+                'casino', 'gambling', '/tips/', 'acca', 'promo', 'sign-up-offer')
+    if any(b in url_path for b in _BETTING):
+        return False
     return (('/sport/' in url_path or '/football/' in url_path)
             and not any(x in url_path for x in
                         ('/author/', '/tag/', '/topic/', '/category/', '/all-about/', '/rss/')))
@@ -556,6 +587,58 @@ def extract_articles_from_author_page(author_url: str, html_text: str) -> list[s
                 links.append(full_url)
 
     return links[:5]
+
+
+def _fetch_html(url: str, timeout: int = 10) -> str | None:
+    """Fetches raw HTML via a normal HTTP request (for non-Cloudflare pages)."""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                          '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+        res = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+        if res.status_code == 200:
+            return res.text
+        logger.warning(f"Failed to fetch {url}, status code: {res.status_code}")
+    except Exception as e:
+        logger.error(f"Error fetching HTML for {url}: {e}")
+    return None
+
+
+def _ingest_feed_article_urls(article_urls: list[str], source_id, team_tag: str,
+                              allow_fallback: bool = False) -> None:
+    """Scrapes each article URL via plain HTTP, applies the strict 24h + relevance
+    filters, and saves new articles. Used for non-Cloudflare feed/author/team pages
+    (e.g. teamtalk.com/arsenal). allow_fallback=False drops articles whose text does
+    not match the source's club, which prevents cross-club mixing on section pages."""
+    import datetime
+    for art_url in article_urls:
+        if database.article_exists(art_url):
+            continue
+
+        art_html = _fetch_html(art_url)
+        if not art_html:
+            continue
+
+        pub_dt = extract_article_published_date(art_html)
+        if not pub_dt:
+            logger.info(f"Skipping article '{art_url}' - missing/unparseable publication date.")
+            continue
+        now = datetime.datetime.now(datetime.timezone.utc)
+        if (now - pub_dt) > datetime.timedelta(hours=24):
+            logger.info(f"Skipping article '{art_url}' - older than 24 hours.")
+            continue
+
+        title, content, image_url = parse_article_html(art_html)
+        if not (title or content):
+            continue
+
+        detected_team = detect_team_from_text(title, content, team_tag, allow_fallback=allow_fallback)
+        if not detected_team:
+            logger.info(f"Article '{art_url}' does not match club '{team_tag}'; skipping.")
+            continue
+
+        database.save_article(source_id, art_url, title, content, image_url, detected_team)
 
 
 def auto_detect_source_classification(url: str) -> tuple[str, str, str]:
@@ -614,37 +697,47 @@ def auto_detect_source_classification(url: str) -> tuple[str, str, str]:
             return 'web_link', url, f"Cloudflare/Paywall protection detected on {clean_domain}. Configured for Headless Chromium (DrissionPage) scraping."
             
         if res.status_code == 200:
-            soup = BeautifulSoup(res.content, 'html.parser')
-            rss_link = None
-            for link_tag in soup.find_all('link', rel='alternate'):
-                l_type = link_tag.get('type', '').lower()
-                l_href = link_tag.get('href', '').strip()
-                if ('rss+xml' in l_type or 'atom+xml' in l_type) and l_href:
-                    rss_link = urljoin(url, l_href)
-                    break
-                    
-            if rss_link:
-                try:
-                    test_feed = feedparser.parse(rss_link)
-                    if len(test_feed.entries) > 0:
-                        return 'rss', rss_link, f"RSS feed auto-discovered in page header: {rss_link}"
-                except Exception:
-                    pass
-                    
-            # Check if common paths work as RSS
-            common_rss_paths = ['/feed', '/feed/', '/rss', '/rss.xml', '?service=rss']
-            for path in common_rss_paths:
-                try:
-                    test_url = urljoin(url, path)
-                    test_res = requests.get(test_url, headers=headers, timeout=4)
-                    if test_res.status_code == 200:
-                        test_feed = feedparser.parse(test_url)
+            # Only auto-discover a site-wide RSS feed when the user gave the site
+            # ROOT. If they gave a section/team/journalist path (e.g. /arsenal), keep
+            # it as a web_link so our club-specific feed extraction runs, instead of
+            # silently replacing it with a global feed that mixes all clubs.
+            is_root = parsed.path.rstrip('/') in ('',) and not parsed.query
+
+            if is_root:
+                soup = BeautifulSoup(res.content, 'html.parser')
+                rss_link = None
+                for link_tag in soup.find_all('link', rel='alternate'):
+                    l_type = link_tag.get('type', '').lower()
+                    l_href = link_tag.get('href', '').strip()
+                    if ('rss+xml' in l_type or 'atom+xml' in l_type) and l_href:
+                        rss_link = urljoin(url, l_href)
+                        break
+
+                if rss_link:
+                    try:
+                        test_feed = feedparser.parse(rss_link)
                         if len(test_feed.entries) > 0:
-                            return 'rss', test_url, f"RSS feed auto-discovered at common path: {test_url}"
-                except Exception:
-                    pass
-                    
-            return 'web_link', url, "Accessible website with no RSS feed. Registered as regular Web Link."
+                            return 'rss', rss_link, f"RSS feed auto-discovered in page header: {rss_link}"
+                    except Exception:
+                        pass
+
+                # Check if common paths work as RSS
+                common_rss_paths = ['/feed', '/feed/', '/rss', '/rss.xml', '?service=rss']
+                for path in common_rss_paths:
+                    try:
+                        test_url = urljoin(url, path)
+                        test_res = requests.get(test_url, headers=headers, timeout=4)
+                        if test_res.status_code == 200:
+                            test_feed = feedparser.parse(test_url)
+                            if len(test_feed.entries) > 0:
+                                return 'rss', test_url, f"RSS feed auto-discovered at common path: {test_url}"
+                    except Exception:
+                        pass
+
+                return 'web_link', url, "Accessible site root with no RSS feed. Registered as regular Web Link."
+
+            return 'web_link', url, ("Section/author/team page detected. Registered as a Web Link "
+                                     "so individual articles are extracted (not replaced by a site-wide feed).")
             
         else:
             return 'web_link', url, f"Server responded with status code {res.status_code}. Registered as regular Web Link."
@@ -933,8 +1026,17 @@ def run_scraper_ingestion(x_scraper=None):
                 except Exception as e:
                     logger.error(f"Error processing TransferFeed Hub {value}: {e}")
             else:
-                # Check if this link itself was processed
-                if not database.article_exists(value):
+                # Treat a generic (non-Cloudflare) web_link as a feed/author/team page:
+                # extract its individual article links and ingest each one. Only if no
+                # article feed is detected do we fall back to scraping the URL itself as a
+                # single article (preserving support for direct single-article links).
+                listing_html = _fetch_html(value)
+                article_urls = extract_articles_from_author_page(value, listing_html) if listing_html else []
+
+                if article_urls:
+                    logger.info(f"Found {len(article_urls)} feed articles on {value}")
+                    _ingest_feed_article_urls(article_urls, source_id, team_tag, allow_fallback=False)
+                elif not database.article_exists(value):
                     title, content, image_url = scrape_web_page(value)
                     if title or content:
                         detected_team = detect_team_from_text(title, content, team_tag)
@@ -1091,3 +1193,179 @@ def run_scraper_ingestion(x_scraper=None):
 
 
 
+
+# ---------------------------------------------------------------------------
+# Read-only source diagnostics (used by the Telegram "Test Source" feature).
+# These functions reuse the SAME helpers as run_scraper_ingestion, so their
+# output reflects exactly what production would do. They write NOTHING to the
+# database or Telegram.
+# ---------------------------------------------------------------------------
+
+def _open_chromium():
+    """Opens a headless Chromium page for testing protected domains. Returns (page, error)."""
+    try:
+        from DrissionPage import ChromiumPage, ChromiumOptions
+        co = ChromiumOptions()
+        co.headless(True)
+        co.set_argument('--no-sandbox')
+        co.set_argument('--disable-gpu')
+        co.set_user_agent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                          '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+        return ChromiumPage(co), None
+    except Exception as e:
+        return None, str(e)
+
+
+def _chromium_get(page, url, wait=5):
+    """Loads a URL in an existing Chromium page and returns its HTML (or None)."""
+    try:
+        page.get(url)
+        time.sleep(wait)
+        return page.html
+    except Exception as e:
+        logger.error(f"DrissionPage fetch failed for {url}: {e}")
+        return None
+
+
+def _which_feed_container(html_text, domain):
+    """Reports which feed container selector matched, for the diagnostic output."""
+    soup = BeautifulSoup(html_text, 'html.parser')
+    _decompose_noise(soup)
+    selectors = []
+    is_known = False
+    for known_domain, sels in _FEED_CONTAINER_SELECTORS.items():
+        if known_domain in domain:
+            selectors = sels
+            is_known = True
+            break
+    for sel in selectors:
+        if soup.select(sel):
+            return f"matched selector '{sel}'"
+    if soup.select('main, [role="main"]'):
+        return "matched generic <main>"
+    if is_known:
+        return ("NO container matched (known portal -> extracts nothing to avoid "
+                "whole-site scraping; selector tuning needed)")
+    return "no specific container; scanning de-noised document (unknown site)"
+
+
+def diagnose_source(url: str, team_tag: str | None = None, deep_limit: int = 3) -> str:
+    """Read-only dry run of the ingestion pipeline for a single URL.
+    Returns a plain-text English report. Writes nothing to the DB or Telegram."""
+    import datetime
+    from urllib.parse import urlparse
+
+    out = []
+    url = (url or '').strip()
+    out.append(f"Source test:\n{url}\n")
+    if not url.startswith('http'):
+        out.append("Not a valid http(s) URL.")
+        return "\n".join(out)
+
+    domain = urlparse(url).netloc.lower()
+
+    try:
+        stype, resolved_url, _desc = auto_detect_source_classification(url)
+    except Exception as e:
+        stype, resolved_url = 'web_link', url
+        out.append(f"(classification error: {e})")
+    out.append(f"Detected type: {stype.upper()}")
+    if resolved_url != url:
+        out.append(f"Resolved URL: {resolved_url}")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    # --- RSS ---
+    if stype == 'rss':
+        try:
+            feed = feedparser.parse(resolved_url)
+            out.append(f"RSS entries found: {len(feed.entries)}")
+            for entry in feed.entries[:5]:
+                title = (entry.get('title', 'No Title') or '')[:70]
+                pub = entry.get('published_parsed')
+                if pub:
+                    pub_dt = datetime.datetime(*pub[:6], tzinfo=datetime.timezone.utc)
+                    age_h = (now - pub_dt).total_seconds() / 3600
+                    status = "within 24h OK" if age_h <= 24 else f"{int(age_h // 24)}d old SKIP"
+                else:
+                    status = "no date SKIP"
+                out.append(f"  - {title}  [{status}]")
+            out.append("Verdict: OK" if feed.entries else "Verdict: no entries (not a usable RSS feed)")
+        except Exception as e:
+            out.append(f"RSS parse error: {e}")
+        return "\n".join(out)
+
+    # --- web_link / feed page ---
+    is_protected = any(d in domain for d in PROTECTED_DOMAINS)
+    page = None
+    try:
+        if is_protected:
+            page, err = _open_chromium()
+            if not page:
+                out.append(f"This is a Cloudflare-protected domain and headless Chromium failed: {err}")
+                return "\n".join(out)
+            fetch = lambda u: _chromium_get(page, u)
+            out.append("Access method: headless Chromium (DrissionPage)")
+        else:
+            fetch = _fetch_html
+            out.append("Access method: plain HTTP (requests)")
+
+        listing_html = fetch(resolved_url)
+        if not listing_html:
+            out.append("Could not fetch the page (blocked or unreachable).")
+            return "\n".join(out)
+
+        out.append(f"Feed container: {_which_feed_container(listing_html, domain)}")
+
+        article_urls = extract_articles_from_author_page(resolved_url, listing_html)
+        out.append(f"Article links extracted: {len(article_urls)}")
+        for u in article_urls:
+            out.append(f"  - {u}")
+
+        if not article_urls:
+            out.append("\nNo article feed detected -> in production this URL would be scraped "
+                        "as a SINGLE page. If this is a journalist/team feed page, the container "
+                        "selector for this domain needs tuning.")
+            return "\n".join(out)
+
+        out.append(f"\nSample article checks (first {deep_limit}):")
+        saved = skipped = 0
+        for art_url in article_urls[:deep_limit]:
+            art_html = fetch(art_url)
+            if not art_html:
+                out.append(f"  SKIP (fetch failed): {art_url}")
+                skipped += 1
+                continue
+            pub_dt = extract_article_published_date(art_html)
+            title, content, _img = parse_article_html(art_html)
+            disp = (title or '(no title)').strip()[:60]
+            if not pub_dt:
+                out.append(f"  SKIP {disp} -- no parseable date")
+                skipped += 1
+                continue
+            age_h = (now - pub_dt).total_seconds() / 3600
+            if age_h > 24:
+                out.append(f"  SKIP {disp} -- {int(age_h // 24)}d old (24h rule)")
+                skipped += 1
+                continue
+            if team_tag:
+                detected = detect_team_from_text(title, content, team_tag, allow_fallback=False)
+                if not detected:
+                    out.append(f"  SKIP {disp} -- not about {team_tag}")
+                    skipped += 1
+                    continue
+                out.append(f"  SAVE {disp} -- date ok, club={detected}")
+            else:
+                out.append(f"  SAVE {disp} -- date ok (no club filter)")
+            saved += 1
+
+        out.append(f"\nVerdict: {len(article_urls)} links; sample -> {saved} would save, {skipped} skipped.")
+        if saved == 0:
+            out.append("Nothing from the sample would be saved -- check dates/relevance.")
+        return "\n".join(out)
+    finally:
+        if page:
+            try:
+                page.quit()
+            except Exception:
+                pass
