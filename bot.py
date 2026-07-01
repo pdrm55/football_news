@@ -343,20 +343,38 @@ def scheduler_loop():
                 else:
                     cookie_alert_sent = False
 
-            # 1. Ingest new articles
-            scraper.run_scraper_ingestion(x_scraper=x_scraper)
-            # 2. Process and Broadcast in real-time
+            # 1. Ingest FAST sources only (RSS + web + X + Google News). The heavy
+            #    Cloudflare/DrissionPage sources run in a separate slow loop, so breaking
+            #    news is no longer stuck behind the ~18-min headless-browser batch.
+            scraper.run_scraper_ingestion(x_scraper=x_scraper, include_protected=False)
+            # 2. Process and Broadcast everything pending (incl. items the slow loop added).
             process_and_broadcast_pipeline()
-            # 3. Clean up database records older than retention period
+        except Exception as e:
+            logger.error(f"Error in background scheduler: {e}")
+
+        logger.info(f"Fast cycle completed. Sleeping for {config.FAST_CYCLE_SECONDS} seconds.")
+        time.sleep(config.FAST_CYCLE_SECONDS)
+
+
+# Slow scheduler for heavy Cloudflare / headless-browser sources
+def protected_scheduler_loop():
+    logger.info("Starting protected (Cloudflare/DrissionPage) scheduler loop...")
+    while True:
+        try:
+            # Ingest ONLY the protected sources. It does not broadcast; the fast loop
+            # picks up and posts whatever this adds within one fast cycle.
+            scraper.run_scraper_ingestion(include_regular=False, include_protected=True,
+                                          include_google=False)
+            # Retention cleanup lives here so it doesn't run every few minutes.
             try:
                 database.delete_old_articles(days=config.DB_RETENTION_DAYS)
             except Exception as prune_err:
                 logger.error(f"Error pruning database: {prune_err}")
         except Exception as e:
-            logger.error(f"Error in background scheduler: {e}")
-        
-        logger.info(f"Scheduled cycle completed. Sleeping for {config.SCHEDULER_CYCLE_SECONDS} seconds.")
-        time.sleep(config.SCHEDULER_CYCLE_SECONDS)
+            logger.error(f"Error in protected scheduler: {e}")
+
+        logger.info(f"Protected cycle completed. Sleeping for {config.PROTECTED_CYCLE_SECONDS} seconds.")
+        time.sleep(config.PROTECTED_CYCLE_SECONDS)
 
 # Persistent button label that opens the settings panel (tap instead of typing).
 SETTINGS_BUTTON_TEXT = "⚙️ Settings"
@@ -1251,9 +1269,13 @@ if __name__ == "__main__":
     # 2. Initialize DB tables on startup
     database.init_db()
     
-    # 3. Launch Background Scheduler Loop in a separate thread
+    # 3. Launch the FAST scheduler loop (RSS/web/X/Google News) in a separate thread
     scheduler_t = threading.Thread(target=scheduler_loop, daemon=True)
     scheduler_t.start()
+
+    # 3a. Launch the SLOW scheduler loop (Cloudflare/DrissionPage sources)
+    protected_t = threading.Thread(target=protected_scheduler_loop, daemon=True)
+    protected_t.start()
 
     # 3b. Launch the isolated TikTok monitor loop in its own thread
     tiktok_t = threading.Thread(target=tiktok_monitor.tiktok_loop, args=(bot,), daemon=True)
