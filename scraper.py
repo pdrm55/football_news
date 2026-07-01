@@ -260,6 +260,22 @@ def extract_rss_image(entry) -> str | None:
     return None
 
 
+# Promo/UI boilerplate lines to drop from extracted article text (e.g. Metro injects
+# newsletter sign-ups, "Use AI to go deeper" widgets, and video-modal dialog text that
+# dilute the real content and quotes sent to Gemini).
+_BOILERPLATE_MARKERS = (
+    'use ai to go deeper', 'sign up', 'newsletter', 'powered by metro',
+    'get it all in our daily', 'this is a modal window', 'escape will cancel',
+    'beginning of dialog', 'end of dialog window', 'activating the close button',
+    'advertisement', 'follow metro on',
+)
+
+
+def _is_boilerplate(text: str) -> bool:
+    t = text.lower()
+    return any(m in t for m in _BOILERPLATE_MARKERS)
+
+
 def parse_article_html(html_content: str) -> tuple[str | None, str | None, str | None]:
     """Parses HTML content using BeautifulSoup and extracts (title, content, image_url)
     using the standard selector logic.
@@ -318,12 +334,14 @@ def parse_article_html(html_content: str) -> tuple[str | None, str | None, str |
         
         if article_body:
             paragraphs = article_body.find_all('p')
-            paragraphs_text = [p.get_text().strip() for p in paragraphs if len(p.get_text().strip()) > 15]
+            paragraphs_text = [t for p in paragraphs
+                               if len(t := p.get_text().strip()) > 15 and not _is_boilerplate(t)]
             content_text = "\n\n".join(paragraphs_text)
-            
+
         if not content_text:
             paragraphs = soup.find_all('p')
-            paragraphs_text = [p.get_text().strip() for p in paragraphs if len(p.get_text().strip()) > 15]
+            paragraphs_text = [t for p in paragraphs
+                               if len(t := p.get_text().strip()) > 15 and not _is_boilerplate(t)]
             content_text = "\n\n".join(paragraphs_text)
             
         if not content_text:
@@ -583,10 +601,13 @@ def _is_article_url(author_domain: str, url_path: str) -> bool:
         return bool(re.search(r'/sport/football/.+-b\d+\.html$', url_path))
 
     if 'dailymail.co.uk' in author_domain or 'dailymail.com' in author_domain:
-        return '/article-' in url_path and url_path.endswith('.html')
+        # Require /football/ so other sections (/sport/tennis/, /sport/boxing/, ...) are
+        # excluded. DailyMail football articles are /sport/football/article-<id>/...
+        return '/football/' in url_path and '/article-' in url_path and url_path.endswith('.html')
 
     if 'thesun.co.uk' in author_domain:
-        if '/sport/' in url_path or '/football/' in url_path:
+        # Require /football/ so /sport/<id>/... tennis/other-sport articles are excluded.
+        if '/football/' in url_path:
             parts = [p for p in url_path.split('/') if p]
             return len(parts) >= 3 and any(p.isdigit() for p in parts)
         return False
@@ -852,7 +873,7 @@ def fetch_google_news(team_query: str) -> list[dict]:
     try:
         feed = feedparser.parse(feed_url)
         results = []
-        for entry in feed.entries[:5]:  # Limit to top 5 news entries per check
+        for entry in feed.entries[:3]:  # Strict: only the 3 most recent entries per check
             link = entry.get('link')
             unique_id = link
             title = entry.get('title', 'No Title')
@@ -922,11 +943,12 @@ def run_gemini_summarizer(title: str, content: str, active_filters: list[str]) -
         "2. COMPACT AND DIRECT STRUCTURE\n"
         "- For each identified talking point, deliver exactly one response block. Do not include multiple options, headings, intro text, or conversational filler.\n"
         "- Pack all critical factual data (names, clubs, specific monetary figures, dates, and historical context) into 1 to 3 tightly constructed sentences per talking point.\n\n"
-        "3. HANDLING DIRECT QUOTES\n"
+        "3. HANDLING DIRECT QUOTES (MANDATORY)\n"
+        "- CRITICAL: If the source text contains ANY direct quotation (any text enclosed in quotation marks, whether double \" \" or single ' '), you MUST reproduce that quote VERBATIM. You are strictly forbidden from paraphrasing, shortening, or rewording a direct quote. Preserving the speaker's exact words is the single most important rule.\n"
         "- When a talking point contains a direct quote from a manager, player, or official, first write a single, highly concise, and coherent plain sentence that summarizes what the quote is talking about.\n"
         "- Do not break up this summary intro with periods or unnecessary punctuation. Keep it short, fluid, and straight to the point.\n"
         "- End this single summary sentence with a colon (:).\n"
-        "- Directly after the colon, insert the exact quote from the source text to ensure the direct quote is fully preserved under the summary.\n\n"
+        "- Directly after the colon, insert the EXACT, word-for-word quote from the source text (copied character for character, inside quotation marks). Never replace a quote with your own summary of it.\n\n"
         "4. GRAMMAR, TONE, AND VOICE\n"
         "- Write with a spartan, informative, and authoritative tone.\n"
         "- Use the active voice exclusively; do not use passive voice constructions.\n"
@@ -973,8 +995,16 @@ def detect_team_from_text(title: str, content: str, default_tag: str | None, all
     """
     if not default_tag or default_tag not in ('Arsenal', 'Liverpool', 'Inter'):
         return default_tag
-        
-    text = f"{title or ''}\n{content or ''}".lower()
+
+    # In strict mode (author/section/Google sources) only look at the title + lead, not
+    # the whole page. A real article's subject is in its headline/opening; an incidental
+    # club mention in a "related stories" sidebar deep in the page must not qualify an
+    # off-topic (e.g. tennis) article. Permissive mode (trusted single-club RSS/X) keeps
+    # scanning the full text.
+    if allow_fallback:
+        text = f"{title or ''}\n{content or ''}".lower()
+    else:
+        text = f"{title or ''}\n{(content or '')[:800]}".lower()
     
     # Try loading from team_keywords.json, fallback to defaults if not found or error
     team_keywords = {}
@@ -1254,59 +1284,54 @@ def run_scraper_ingestion(x_scraper=None, include_regular=True,
 
     for team, query in google_queries.items():
         articles = fetch_google_news(query)
+        # Titles that mark aggregation / live-blog / multi-rumour entries. Google News
+        # links cannot be resolved to the real article (they stay on news.google.com), so
+        # we work from the RSS title + snippet. These aggregation entries are exactly the
+        # ones that carry several (often stale) rumours and get split into multiple wrong
+        # posts, so we reject them under the strict filter.
+        _AGGREGATION_MARKERS = ('live:', 'live blog', 'as it happened', 'round-up', 'roundup',
+                                'rumours:', 'rumors:', 'latest:', 'transfer news live',
+                                'every ', 'all the', 'wrap:', 'gossip')
         for a in articles:
-            # Use clickable URL as the unique identifier for checks and saves
             article_url = a['url']
-            if not database.article_exists(article_url):
-                # Resolve the Google News link to the actual page to scrape content and image
-                resolved_title, resolved_content, resolved_image = scrape_web_page(article_url)
-                
-                # Verify if resolved content is valid and not a paywall/consent wall
-                is_valid = True
-                if resolved_content:
-                    garbage_keywords = [
-                        'accept cookies', 'cookie policy', 'privacy policy', 'terms of service', 
-                        'adblocker', 'subscribe to read', 'premium content', 'sign in', 'log in', 
-                        'enable javascript'
-                    ]
-                    content_lower = resolved_content.lower()
-                    if any(kw in content_lower for kw in garbage_keywords):
-                        is_valid = False
-                    
-                    # Must contain team tag or general football terms to be valid
-                    football_terms = [team.lower(), 'football', 'soccer', 'transfer', 'player', 'match', 'league', 'cup']
-                    if not any(term in content_lower for term in football_terms):
-                        is_valid = False
-                else:
-                    is_valid = False
-                    
-                if resolved_content and is_valid:
-                    content = resolved_content
-                    title = resolved_title if resolved_title else a['title']
-                    image = resolved_image if resolved_image else a['media_url']
-                else:
-                    # Fallback to high-quality RSS metadata provided by Google News
-                    content = a['content']
-                    title = a['title']
-                    image = a['media_url']
-                
-                # Find or create the virtual system source for database schema integrity
-                system_source_value = f"system_google_news_{team.lower()}"
-                cache_key = ('rss', system_source_value, team)
+            if database.article_exists(article_url):
+                continue
+
+            title = a['title'] or ''
+            content = a['content'] or ''
+            image = a['media_url']
+
+            # STRICT: reject aggregation/live entries.
+            if any(m in title.lower() for m in _AGGREGATION_MARKERS):
+                logger.info(f"Google News (strict): rejecting aggregation entry '{title[:60]}'.")
+                continue
+
+            # STRICT: content must be football-related and free of paywall/consent junk.
+            cl = content.lower()
+            garbage_keywords = ['accept cookies', 'cookie policy', 'privacy policy', 'subscribe to read',
+                                'premium content', 'sign in', 'log in', 'enable javascript']
+            football_terms = [team.lower(), 'football', 'transfer', 'signing', 'contract', 'deal', 'move']
+            if any(k in cl for k in garbage_keywords) or not any(t in (title.lower() + ' ' + cl) for t in football_terms):
+                logger.info(f"Google News (strict): '{title[:60]}' failed football/validity check.")
+                continue
+
+            # Find or create the virtual system source for database schema integrity
+            system_source_value = f"system_google_news_{team.lower()}"
+            cache_key = ('rss', system_source_value, team)
+            system_source_id = _sources_cache.get(cache_key)
+
+            if not system_source_id:
+                database.add_source('rss', system_source_value, team)
+                updated_sources = database.get_sources()
+                _sources_cache = {(s['type'], s['value'], s['team_tag']): s['id'] for s in updated_sources}
                 system_source_id = _sources_cache.get(cache_key)
-                
-                if not system_source_id:
-                    database.add_source('rss', system_source_value, team)
-                    # Re-fetch and update cache
-                    updated_sources = database.get_sources()
-                    _sources_cache = {(s['type'], s['value'], s['team_tag']): s['id'] for s in updated_sources}
-                    system_source_id = _sources_cache.get(cache_key)
-                            
-                detected_team = detect_team_from_text(title, content, team, allow_fallback=False)
-                if not detected_team:
-                    logger.info(f"Google News article '{title}' does not match any target clubs. Skipping Ingestion.")
-                    continue
-                database.save_article(system_source_id, article_url, title, content, image, detected_team)
+
+            # Strict relevance: club must be the subject (title + lead), not a passing mention.
+            detected_team = detect_team_from_text(title, content, team, allow_fallback=False)
+            if not detected_team:
+                logger.info(f"Google News article '{title}' does not match any target clubs. Skipping Ingestion.")
+                continue
+            database.save_article(system_source_id, article_url, title, content, image, detected_team)
                 
     logger.info("Scraper Ingestion Cycle Completed.")
 
