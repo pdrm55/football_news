@@ -24,18 +24,26 @@ touching the code.
   fetched it is skipped.
 - **In-bot admin panel:** add/remove sources, manage keyword filters, test a source
   URL (dry run), run the scraper on demand, and rotate X cookies/accounts.
+- **TikTok Monitor (no AI):** watch TikTok creators and post their new videos to a
+  Telegram topic as native, autoplaying clips — for repurposing on X.
 
 ---
 
 ## How it works
 
+Ingestion runs in **two independent loops** so breaking news is not stuck behind the
+heavy Cloudflare/headless-browser scraping:
+
 ```
-scheduler loop (every 10 min)
-  ├─ ingest sources  (RSS / web / Cloudflare / X / Google News)
-  │     └─ per item: 24h freshness check  →  club-relevance check  →  save (dedup by URL)
+FAST loop (~3 min): RSS + plain web + X + Google News
+  ├─ per item: 24h freshness check → club-relevance check → save (dedup by URL)
   ├─ summarize new items with Gemini  (X posts skipped — already short)
-  ├─ broadcast to the club's Telegram topic
-  └─ prune DB rows older than the retention period
+  └─ broadcast to the club's Telegram topic
+
+SLOW loop (~20 min): Cloudflare-protected sites (headless Chromium)
+  └─ ingest only; the fast loop broadcasts what it adds, and prunes old rows
+
+TikTok loop (~10 min): monitored creators  →  download  →  native autoplay video
 ```
 
 ---
@@ -57,9 +65,10 @@ scheduler loop (every 10 min)
 
 | File | Role |
 |------|------|
-| `bot.py` | Telegram bot, admin panel, background scheduler, broadcasting |
+| `bot.py` | Telegram bot, admin panel, fast/slow schedulers, broadcasting |
 | `scraper.py` | Source ingestion (RSS/web/Cloudflare/X/Google News) + Gemini summarizer |
-| `database.py` | SQLite layer (sources, filters, articles) — auto-created on first run |
+| `tiktok_monitor.py` | TikTok Monitor module (watch creators, download, post native video) |
+| `database.py` | SQLite layer (sources, filters, articles, TikTok) — auto-created on first run |
 | `config.py` | Loads environment variables and tunable constants |
 | `team_keywords.json` | Per-club keyword lists used for relevance detection |
 | `.env.template` | Template for required/optional environment variables |
@@ -145,10 +154,14 @@ to the main chat.)
 
 | Constant | Default | Meaning |
 |----------|---------|---------|
-| `SCHEDULER_CYCLE_SECONDS` | `600` | Time between ingestion cycles (seconds) |
+| `FAST_CYCLE_SECONDS` | `180` | Sleep between fast cycles (RSS/web/X/Google News) |
+| `PROTECTED_CYCLE_SECONDS` | `1200` | Sleep between slow cycles (Cloudflare/DrissionPage) |
 | `MAX_BATCH_SIZE` | `30` | Max pending articles processed per cycle |
 | `MAX_BACKLOG` | `15` | Max backlog broadcast per cycle (anti-flood) |
 | `DB_RETENTION_DAYS` | `7` | Delete sent/skipped rows older than this |
+| `TIKTOK_CYCLE_SECONDS` | `600` | Polling interval for the TikTok monitor loop |
+| `TIKTOK_FETCH_LIMIT` | `5` | Latest videos checked per creator per cycle |
+| `TIKTOK_MAX_VIDEO_MB` | `49` | Max video size uploaded natively (Telegram limit is 50 MB) |
 
 ---
 
