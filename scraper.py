@@ -354,6 +354,40 @@ def scrape_web_page(url: str) -> tuple[str | None, str | None, str | None]:
         return None, None, None
 
 
+def scrape_transferfeed_latest(url: str) -> tuple[str | None, str | None, str | None]:
+    """Scrapes a TransferFeed player transfer page and returns ONLY the most recent
+    update, not the full history. TransferFeed lists every update for a player in
+    `.transfer-news-card` blocks (newest first, tagged `--recent`); we take just the
+    first one. Returns (title, latest_update_text, image_url)."""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                          '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://www.google.com/',
+        }
+        res = requests.get(url, headers=headers, timeout=12)
+        if res.status_code != 200:
+            logger.warning(f"Failed to fetch TransferFeed page {url}: status {res.status_code}")
+            return None, None, None
+        soup = BeautifulSoup(res.text, 'html.parser')
+
+        title_tag = soup.find('h1') or soup.find('title')
+        title = title_tag.get_text().strip().replace(' - TransferFeed', '') if title_tag else None
+
+        cards = soup.select('.transfer-news-card')
+        latest = cards[0].get_text(' ', strip=True) if cards else None
+
+        image = None
+        og = soup.find('meta', property='og:image')
+        if og and og.get('content'):
+            image = og['content']
+
+        return title, latest, image
+    except Exception as e:
+        logger.error(f"Error scraping TransferFeed page {url}: {e}")
+        return None, None, None
+
+
 def extract_article_published_date(html_text: str) -> datetime.datetime | None:
     """Attempts to extract the publication date of an article from its HTML metadata.
     Returns a timezone-aware datetime in UTC, or None if not found.
@@ -1080,18 +1114,27 @@ def run_scraper_ingestion(x_scraper=None, include_regular=True,
                                 items.append((text, full_url))
                         
                         logger.info(f"Extracted {len(items)} rumours from TransferFeed.")
-                        # Process top 5 latest rumours
+                        # Process top 5 players. For each, take ONLY the most recent update
+                        # (not the player's whole history). The unique id embeds a hash of
+                        # that latest update, so a genuinely newer update posts once while
+                        # the same update is never re-posted.
+                        import hashlib
                         for title_text, rumour_url in items[:5]:
-                            if not database.article_exists(rumour_url):
-                                logger.info(f"Scraping new TransferFeed rumour: {rumour_url}")
-                                web_title, web_content, web_image = scrape_web_page(rumour_url)
-                                title = web_title if web_title else title_text
-                                content = web_content if web_content else title_text
-                                detected_team = detect_team_from_text(title, content, team_tag, allow_fallback=False)
-                                if not detected_team:
-                                    logger.info(f"TransferFeed rumour '{title}' does not match any target clubs. Skipping Ingestion.")
-                                    continue
-                                database.save_article(source_id, rumour_url, title, content, web_image, detected_team)
+                            web_title, latest_update, web_image = scrape_transferfeed_latest(rumour_url)
+                            content = latest_update if latest_update else title_text
+                            if not content:
+                                continue
+                            sig = hashlib.md5(content.strip().lower().encode('utf-8')).hexdigest()[:10]
+                            uid = f"{rumour_url}#{sig}"
+                            if database.article_exists(uid):
+                                continue
+                            logger.info(f"New TransferFeed update: {rumour_url}")
+                            title = web_title if web_title else title_text
+                            detected_team = detect_team_from_text(title, content, team_tag, allow_fallback=False)
+                            if not detected_team:
+                                logger.info(f"TransferFeed rumour '{title}' does not match any target clubs. Skipping Ingestion.")
+                                continue
+                            database.save_article(source_id, uid, title, content, web_image, detected_team)
                 except Exception as e:
                     logger.error(f"Error processing TransferFeed Hub {value}: {e}")
             else:
