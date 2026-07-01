@@ -973,11 +973,18 @@ def detect_team_from_text(title: str, content: str, default_tag: str | None, all
     return default_tag if allow_fallback else None
 
 
-def run_scraper_ingestion(x_scraper=None):
-    """Loops through all sources in the database and background Google News feeds,
-    fetches new articles, and saves them to SQLite.
+def run_scraper_ingestion(x_scraper=None, include_regular=True,
+                          include_protected=True, include_google=True):
+    """Loops through sources and Google News feeds, fetches new articles, saves to SQLite.
+
+    The work is split so callers can run the FAST sources (RSS/web/X + Google News) on a
+    short cycle and the SLOW Cloudflare/headless-browser sources on a longer cycle:
+      - include_regular:   RSS, plain web links, X accounts, TransferFeed
+      - include_protected: Cloudflare/JS sources scraped with DrissionPage (the slow part)
+      - include_google:    Google News feeds
     """
-    logger.info("Starting Scraper Ingestion Cycle...")
+    logger.info(f"Starting Scraper Ingestion (regular={include_regular}, "
+                f"protected={include_protected}, google={include_google})...")
     
     # 1. Fetch User-Configured Sources from DB
     sources = database.get_sources()
@@ -986,8 +993,9 @@ def run_scraper_ingestion(x_scraper=None):
     global _sources_cache
     _sources_cache = {(s['type'], s['value'], s['team_tag']): s['id'] for s in sources}
     
-    x_client = x_scraper if x_scraper is not None else XScraper()
-    
+    # Only needed for x_account sources (regular loop); the slow/protected loop skips it.
+    x_client = x_scraper if x_scraper is not None else (XScraper() if include_regular else None)
+
     # Separate standard sources from Cloudflare-protected web link sources
     regular_sources = []
     protected_web_sources = []
@@ -1003,7 +1011,7 @@ def run_scraper_ingestion(x_scraper=None):
         regular_sources.append(src)
         
     # Process Regular Sources
-    for src in regular_sources:
+    for src in (regular_sources if include_regular else []):
         source_id = src['id']
         source_type = src['type']
         value = src['value']
@@ -1114,7 +1122,7 @@ def run_scraper_ingestion(x_scraper=None):
                 logger.error(f"Error processing X account {value}: {e}")
 
     # Process Cloudflare-Protected Web Sources (Throttled Headless Chromium)
-    if protected_web_sources:
+    if include_protected and protected_web_sources:
         logger.info(f"Starting DrissionPage batch scraping for {len(protected_web_sources)} protected sources...")
         _patch_drission_websocket()
         from DrissionPage import ChromiumPage, ChromiumOptions
@@ -1199,8 +1207,8 @@ def run_scraper_ingestion(x_scraper=None):
         'Arsenal': '"Arsenal FC"',
         'Liverpool': '"Liverpool FC"',
         'Inter': '"Inter Milan"'
-    }
-    
+    } if include_google else {}
+
     for team, query in google_queries.items():
         articles = fetch_google_news(query)
         for a in articles:

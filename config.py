@@ -89,7 +89,12 @@ else:
     logger.info("Configuration loaded successfully.")
 
 # Scheduler & Ingestion Parameters
-SCHEDULER_CYCLE_SECONDS = 600  # 10 minutes loop
+# Fast loop: RSS + plain web + X + Google News (latency-sensitive). Slow loop: the
+# Cloudflare/headless-browser sources, which are heavy and less time-critical. Splitting
+# them keeps breaking news fast instead of waiting behind the ~18-min DrissionPage batch.
+FAST_CYCLE_SECONDS = 180       # Sleep between fast (RSS/web/X/Google) cycles
+PROTECTED_CYCLE_SECONDS = 1200 # Sleep between slow (Cloudflare/DrissionPage) cycles
+SCHEDULER_CYCLE_SECONDS = FAST_CYCLE_SECONDS  # backward-compat alias
 MAX_BATCH_SIZE = 30            # Max pending articles to process in one cycle
 MAX_BACKLOG = 15               # Max backlog articles to process on startup
 DB_RETENTION_DAYS = 7          # DB retention policy period
