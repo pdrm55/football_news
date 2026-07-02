@@ -158,12 +158,15 @@ From **🎵 TikTok Monitor**:
 
 Finds new football X accounts for you — great for spotting accounts to follow or buy.
 
-1. Tap **🔎 X Lead Finder → ▶️ Run Scan Now**.
+1. Tap **🔎 X Lead Finder**, then choose:
+   - **▶️ Run Scan (≥ 8,500)** — quick scan with the default threshold, or
+   - **🔢 Custom Minimum…** — type your own follower minimum (e.g. `20000`) and it scans
+     for accounts at or above that number.
 2. A **live progress bar** shows the scan working (`▰▰▰▱▱▱ 4/12`, accounts scanned,
    qualified count). **You can leave this screen** — the bot works in the background.
 3. When it finishes (a few minutes), the bot sends you an **Excel (.xlsx) file** with:
    **Account Name, Handle, Follower Count, Profile Bio, Profile Link** — only accounts
-   with **8,500+ followers** in the football niche, sorted by follower count.
+   above your follower threshold in the football niche, sorted by follower count.
 
 You can tap and go — the file arrives automatically when it's ready.
 

@@ -548,6 +548,10 @@ def handle_callbacks(call):
             _lead_scan_running.set()
             bot.answer_callback_query(call.id, "Lead scan started in background...")
             threading.Thread(target=_run_lead_scan, args=(chat_id,), daemon=True).start()
+
+    elif data == "lead_custom":
+        bot.answer_callback_query(call.id)
+        prompt_lead_min(chat_id)
         
     elif data == "update_x_cookies":
         prompt_auth_token(chat_id)
@@ -638,16 +642,49 @@ _lead_scan_running = threading.Event()  # prevents overlapping scans hammering t
 
 def show_lead_finder_menu(chat_id, message_id):
     markup = InlineKeyboardMarkup()
-    markup.row(InlineKeyboardButton("▶️ Run Scan Now", callback_data="lead_run"))
+    markup.row(InlineKeyboardButton("▶️ Run Scan (≥ 8,500)", callback_data="lead_run"))
+    markup.row(InlineKeyboardButton("🔢 Custom Minimum…", callback_data="lead_custom"))
     markup.row(InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu"))
     bot.edit_message_text(
         "🔎 <b>X Lead Finder</b>\n"
-        "Scans X for football accounts with <b>8,500+</b> followers and sends you an "
+        "Scans X for football accounts above a follower threshold and sends you an "
         "Excel sheet (Name, Handle, Followers, Bio, Profile Link).\n\n"
-        "A scan takes a few minutes (human-like delays keep the account safe). "
-        "Tap <b>Run Scan Now</b> to start.",
+        "• <b>Run Scan (≥ 8,500)</b> — quick scan with the default threshold.\n"
+        "• <b>Custom Minimum…</b> — enter your own number (e.g. 20000).\n\n"
+        "A scan takes a few minutes (human-like delays keep the account safe).",
         chat_id, message_id, reply_markup=markup, parse_mode='HTML'
     )
+
+def prompt_lead_min(chat_id):
+    msg = bot.send_message(
+        chat_id,
+        "🔢 <b>Custom follower minimum</b>\n\n"
+        "Send the minimum follower count to search for (e.g. <code>20000</code>).\n"
+        "Only accounts with at least that many followers will be included.\n\n"
+        "Or type /cancel to abort.",
+        parse_mode='HTML'
+    )
+    bot.register_next_step_handler(msg, save_lead_min)
+
+def save_lead_min(message):
+    if menu_button_interrupt(message):
+        return
+    raw = (message.text or "").strip()
+    if raw.lower() == '/cancel':
+        bot.send_message(message.chat.id, "❌ Cancelled.")
+        send_main_menu(message.chat.id)
+        return
+    digits = raw.replace(",", "").replace(" ", "").lstrip("≥>=")
+    if not digits.isdigit() or int(digits) <= 0:
+        bot.send_message(message.chat.id, "❌ Please send a whole number like 20000. Cancelled.")
+        send_main_menu(message.chat.id)
+        return
+    min_followers = int(digits)
+    if _lead_scan_running.is_set():
+        bot.send_message(message.chat.id, "A scan is already running — please wait for it to finish.")
+        return
+    _lead_scan_running.set()
+    threading.Thread(target=_run_lead_scan, args=(message.chat.id, min_followers), daemon=True).start()
 
 def _run_lead_scan(chat_id, min_followers=8500):
     """Runs the X lead scraper in the background, shows a live progress bar, and delivers
