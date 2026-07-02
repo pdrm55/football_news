@@ -296,3 +296,9 @@ install the official `twikit` package, as the two can conflict.
 - The database (`football_news.db`), real `.env`, and `cookies.json` are **not** included
   in this package and must be provided/created at deploy time.
 - All admin-panel messages are in English.
+
+---
+
+## License
+
+Released under the [MIT License](LICENSE).
