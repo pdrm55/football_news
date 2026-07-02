@@ -14,9 +14,15 @@ touching the code.
 - **Multi-source ingestion:** RSS, web/author/team pages, Cloudflare-protected sites
   (headless Chromium), X/Twitter accounts, and Google News.
 - **AI summaries:** long articles are condensed into punchy posts with Google Gemini.
-  (Tweets are posted as-is.)
-- **Per-club routing:** each club can post to its own Telegram forum topic.
-- **Strict 24-hour freshness:** only articles published in the last 24h are posted.
+  (Tweets are posted as-is — no AI.)
+- **X retweets included:** curator/aggregator accounts that mostly retweet are supported;
+  the original tweet's full text is posted and de-duplicated by the original tweet.
+- **Auto-translation:** non-English tweets (e.g. Arabic accounts) are translated to
+  English via Google Translate with a visible "🌐 Auto-translated" flag.
+- **Per-club routing + General tab:** each club posts to its own Telegram forum topic;
+  X posts not about any of the 3 clubs are routed to a **General** topic to cut noise.
+- **One-tap Copy:** every broadcast has a 📋 **Copy Text** button for quick reposting.
+- **Strict 24-hour freshness:** only items from the last 24h are posted.
 - **Club-relevance filter:** off-club / off-topic articles are dropped (no tennis news
   in the Arsenal channel).
 - **Duplicate suppression:** every item is de-duplicated by its unique URL/ID.
@@ -25,7 +31,10 @@ touching the code.
 - **In-bot admin panel:** add/remove sources, manage keyword filters, test a source
   URL (dry run), run the scraper on demand, and rotate X cookies/accounts.
 - **TikTok Monitor (no AI):** watch TikTok creators and post their new videos to a
-  Telegram topic as native, autoplaying clips — for repurposing on X.
+  Telegram topic as native, autoplaying clips — with the original caption + top 3 liked
+  comments. Adding an account instantly posts its 3 most recent videos.
+- **X Lead Finder:** a one-tap tool that scans X for football accounts above a follower
+  threshold and delivers the results as an Excel file in the bot.
 
 ---
 
@@ -186,6 +195,8 @@ button (or send `/settings`). The panel offers:
 - **🔑 Update X Cookies** — register fresh `auth_token` / `ct0` cookies.
 - **👤 Switch X Account** — change the X username/password/email and cookies.
 - **🎵 TikTok Monitor** — manage monitored TikTok creators (see below).
+- **🔎 X Lead Finder** — scan X for football accounts above the follower threshold and
+  receive the results as an Excel file (runs in the background with a live progress bar).
 
 ---
 
@@ -199,9 +210,13 @@ creators and, when they post a new video, downloads it and posts it to Telegram 
 to its thread ID (leave `TIKTOK_CHAT_ID` blank to use the main chat). Requires `yt-dlp`
 (installed via `requirements.txt`) and `ffmpeg` on the host.
 
+Each video is posted with its **original caption + the top 3 most-liked comments** (raw,
+no AI).
+
 **Manage it** from `/settings → 🎵 TikTok Monitor`:
-- **➕ Add Account** — send a creator handle (e.g. `khaby.lame`). Only videos posted
-  *after* you add it are alerted (the current backlog is silently marked as seen).
+- **➕ Add Account** — send a creator handle (e.g. `khaby.lame`). The bot immediately posts
+  the account's **3 most recent videos** (with caption + top comments), then live-monitors
+  for new posts.
 - **❌ Remove Account** / list monitored accounts.
 - **🧪 Test an Account** — dry-run a handle to see which recent videos the bot can find
   (nothing is downloaded or posted).
