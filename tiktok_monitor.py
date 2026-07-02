@@ -98,6 +98,7 @@ def download_video(url: str, dest_dir: str) -> tuple[str | None, dict]:
             'width': info.get('width'),
             'height': info.get('height'),
             'duration': info.get('duration'),
+            'description': (info.get('description') or '').strip(),
         }
         return path, meta
     except Exception as e:
@@ -105,34 +106,90 @@ def download_video(url: str, dest_dir: str) -> tuple[str | None, dict]:
         return None, {}
 
 
+# --- Metadata layer (caption + top comments; NO AI) ---
+def fetch_top_comments(video_id: str, video_url: str, limit: int = 3) -> list[dict]:
+    """Returns the top `limit` most-liked comments for a TikTok video as
+    [{text, likes}], sorted by like count. Uses TikTok's public comment endpoint
+    with browser headers. Robust: returns [] on any failure."""
+    try:
+        import requests
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                          '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': video_url,
+        }
+        api = (f"https://www.tiktok.com/api/comment/list/?aweme_id={video_id}"
+               f"&count=30&cursor=0&app_language=en&aid=1988")
+        proxies = {'http': config.PROXY_URL, 'https': config.PROXY_URL} if config.PROXY_URL else None
+        r = requests.get(api, headers=headers, timeout=15, proxies=proxies)
+        comments = (r.json().get('comments') or [])
+        top = sorted(comments, key=lambda c: (c.get('digg_count') or 0), reverse=True)[:limit]
+        out = []
+        for c in top:
+            text = (c.get('text') or '').strip()
+            if text:
+                out.append({'text': text, 'likes': c.get('digg_count')})
+        return out
+    except Exception as e:
+        logger.warning(f"Could not fetch comments for {video_id}: {e}")
+        return []
+
+
+def build_metadata_block(handle: str, url: str, caption: str, comments: list[dict]) -> str:
+    """Builds the raw text block posted with each video: original caption + top comments.
+    No AI/summarization — verbatim content only."""
+    lines = [f"🎵 @{handle}"]
+    if caption:
+        lines += ["", caption]
+    if comments:
+        lines += ["", "💬 Top comments:"]
+        for i, c in enumerate(comments, 1):
+            likes = c.get('likes')
+            like_str = f" (♥{likes:,})" if isinstance(likes, int) else ""
+            lines.append(f"{i}.{like_str} {c['text']}")
+    lines += ["", url]
+    return "\n".join(lines)
+
+
 # --- Posting layer ---
 def _format_caption(handle: str, url: str) -> str:
     return f"🎵 New TikTok from @{handle}\n{url}"
 
 
-def _send_native_video(bot, path: str, meta: dict, handle: str, url: str) -> bool:
-    """Uploads the video natively so Telegram autoplays it. Returns True on success."""
+_CAPTION_LIMIT = 1024  # Telegram media caption hard limit
+
+def _send_native_video(bot, path: str, meta: dict, handle: str, url: str, text_block: str) -> bool:
+    """Uploads the video natively (autoplay) with the metadata text block. If the block
+    fits Telegram's 1024-char caption limit it becomes the caption; otherwise the video
+    is sent with a short caption and the full block follows as a separate message."""
     try:
+        if len(text_block) <= _CAPTION_LIMIT:
+            caption, followup = text_block, None
+        else:
+            caption, followup = _format_caption(handle, url), text_block
         with open(path, 'rb') as f:
             bot.send_video(
                 chat_id=config.TIKTOK_CHAT_ID,
                 video=f,
-                caption=_format_caption(handle, url),
+                caption=caption,
                 supports_streaming=True,
                 width=meta.get('width'),
                 height=meta.get('height'),
                 duration=meta.get('duration'),
                 message_thread_id=config.TIKTOK_THREAD_ID,
             )
+        if followup:
+            bot.send_message(chat_id=config.TIKTOK_CHAT_ID, text=followup[:4096],
+                             message_thread_id=config.TIKTOK_THREAD_ID)
         logger.info(f"Posted native TikTok video for @{handle}: {url}")
         return True
     except Exception as e:
         logger.warning(f"Native video upload failed for @{handle} ({url}): {e}")
-        # Fallback: at least send the link so the alert is not lost.
+        # Fallback: at least send the metadata text so the alert is not lost.
         try:
             bot.send_message(
                 chat_id=config.TIKTOK_CHAT_ID,
-                text=f"🎵 New TikTok from @{handle} (video too large/failed to upload):\n{url}",
+                text=(text_block or _format_caption(handle, url))[:4096] + "\n(video failed to upload)",
                 message_thread_id=config.TIKTOK_THREAD_ID,
             )
             return True
@@ -141,16 +198,52 @@ def _send_native_video(bot, path: str, meta: dict, handle: str, url: str) -> boo
             return False
 
 
-# --- Account onboarding ---
-def seed_account_baseline(handle: str) -> int:
-    """Marks a newly added creator's current videos as 'seen' so the bot only alerts on
-    videos posted AFTER the account was added (no backlog dump). Returns count seeded."""
-    handle = handle.lstrip('@').lower()
-    vids = fetch_latest_videos(handle)
-    for v in vids:
-        database.mark_tiktok_video_seen(handle, v['video_id'])
-    logger.info(f"Seeded {len(vids)} baseline videos as seen for @{handle}.")
-    return len(vids)
+# --- Per-video processing (shared by the live cycle and the initial fetch) ---
+def process_and_post_video(bot, handle: str, video: dict) -> bool:
+    """Downloads one video, gathers its caption + top-3 liked comments, posts it to
+    Telegram (video + metadata text block, NO AI), and marks it seen. Returns True if
+    a message was sent."""
+    vid, url = video['video_id'], video['url']
+    logger.info(f"Processing TikTok video from @{handle}: {url}")
+    tmp = tempfile.mkdtemp(prefix="tt_")
+    try:
+        path, meta = download_video(url, tmp)
+        caption = meta.get('description') or (video.get('title') or '')
+        comments = fetch_top_comments(vid, url, limit=3)
+        block = build_metadata_block(handle, url, caption, comments)
+        if path and os.path.exists(path):
+            sent = _send_native_video(bot, path, meta, handle, url, block)
+        else:
+            # Could not download the file; still post the metadata + link.
+            bot.send_message(chat_id=config.TIKTOK_CHAT_ID,
+                             text=block[:4096] + "\n(video download failed)",
+                             message_thread_id=config.TIKTOK_THREAD_ID)
+            sent = True
+        database.mark_tiktok_video_seen(handle, vid)  # mark seen either way (no retry loops)
+        return sent
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# --- Account onboarding: post the N most recent videos immediately, then monitor ---
+def post_recent_videos(bot, handle: str, limit: int = 3) -> int:
+    """Called when a new account is registered: downloads and posts the `limit` most
+    recent videos (with caption + top comments), marks their IDs seen, then the regular
+    monitor loop takes over for future posts. Returns how many were posted."""
+    handle = normalize_handle(handle)
+    vids = fetch_latest_videos(handle, limit)[:limit]
+    posted = 0
+    for v in reversed(vids):  # oldest-first so newest ends up on top
+        if database.is_tiktok_video_seen(handle, v['video_id']):
+            continue
+        try:
+            if process_and_post_video(bot, handle, v):
+                posted += 1
+            time.sleep(2)
+        except Exception as e:
+            logger.error(f"Error posting recent video for @{handle}: {e}")
+    logger.info(f"Initial fetch for @{handle}: posted {posted} recent video(s).")
+    return posted
 
 
 # --- Cycle / loop ---
@@ -167,27 +260,13 @@ def run_tiktok_cycle(bot):
             videos = fetch_latest_videos(handle)
             # Oldest-first so posts arrive in chronological order.
             for v in reversed(videos):
-                vid, url = v['video_id'], v['url']
-                if database.is_tiktok_video_seen(handle, vid):
+                if database.is_tiktok_video_seen(handle, v['video_id']):
                     continue
-
-                logger.info(f"New TikTok detected from @{handle}: {url}")
-                tmp = tempfile.mkdtemp(prefix="tt_")
+                logger.info(f"New TikTok detected from @{handle}: {v['url']}")
                 try:
-                    path, meta = download_video(url, tmp)
-                    if path and os.path.exists(path):
-                        _send_native_video(bot, path, meta, handle, url)
-                    else:
-                        # Could not download; still alert with the link.
-                        bot.send_message(
-                            chat_id=config.TIKTOK_CHAT_ID,
-                            text=f"🎵 New TikTok from @{handle} (download failed):\n{url}",
-                            message_thread_id=config.TIKTOK_THREAD_ID,
-                        )
-                    # Mark seen regardless, so we don't retry forever on a bad video.
-                    database.mark_tiktok_video_seen(handle, vid)
-                finally:
-                    shutil.rmtree(tmp, ignore_errors=True)
+                    process_and_post_video(bot, handle, v)
+                except Exception as e:
+                    logger.error(f"Error posting video {v['url']} for @{handle}: {e}")
                 time.sleep(2)  # gentle pacing between uploads
         except Exception as e:
             logger.error(f"Error processing TikTok creator @{handle}: {e}")

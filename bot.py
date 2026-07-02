@@ -714,15 +714,20 @@ def save_tiktok_account(message):
         return
 
     if database.add_tiktok_account(handle):
-        bot.send_message(message.chat.id, f"✅ Now monitoring TikTok @{handle}.\nSetting baseline (existing videos won't be re-posted)…")
-        try:
-            n = tiktok_monitor.seed_account_baseline(handle)
-            bot.send_message(message.chat.id, f"📌 Baseline set ({n} current videos marked as seen). New posts will be alerted.")
-        except Exception as e:
-            bot.send_message(message.chat.id, f"⚠️ Added, but could not set baseline now: {e}")
+        bot.send_message(message.chat.id, f"✅ Now monitoring TikTok @{handle}.\nFetching the 3 most recent videos now (this may take a minute)…")
+        # Post the 3 most recent videos immediately (in the background so we don't block
+        # the handler), then the live monitor takes over for future posts.
+        threading.Thread(target=_tiktok_initial_fetch, args=(message.chat.id, handle), daemon=True).start()
     else:
         bot.send_message(message.chat.id, f"❌ @{handle} is already monitored (or invalid).")
     send_main_menu(message.chat.id)
+
+def _tiktok_initial_fetch(chat_id, handle):
+    try:
+        n = tiktok_monitor.post_recent_videos(bot, handle, limit=3)
+        bot.send_message(chat_id, f"📌 Posted {n} recent video(s) from @{handle}. Now live-monitoring for new posts.")
+    except Exception as e:
+        bot.send_message(chat_id, f"⚠️ @{handle} was added, but the initial fetch failed: {e}")
 
 def prompt_tiktok_test(chat_id):
     msg = bot.send_message(
