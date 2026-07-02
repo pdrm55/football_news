@@ -658,13 +658,29 @@ def show_lead_finder_menu(chat_id, message_id):
 def prompt_lead_min(chat_id):
     msg = bot.send_message(
         chat_id,
-        "🔢 <b>Custom follower minimum</b>\n\n"
-        "Send the minimum follower count to search for (e.g. <code>20000</code>).\n"
-        "Only accounts with at least that many followers will be included.\n\n"
+        "🔢 <b>Custom follower filter</b>\n\n"
+        "Send either:\n"
+        "• a single <b>minimum</b> — e.g. <code>20000</code>, or\n"
+        "• a <b>range</b> min–max — e.g. <code>7000-20000</code> or <code>7000 to 20000</code>.\n\n"
         "Or type /cancel to abort.",
         parse_mode='HTML'
     )
     bot.register_next_step_handler(msg, save_lead_min)
+
+def _parse_follower_filter(raw):
+    """Parses '20000' -> (20000, None) or '7000-20000'/'7,000 to 20,000' -> (7000, 20000).
+    Returns None if the input isn't a valid number or range."""
+    import re
+    s = re.sub(r'\b(to|through)\b', '-', raw.lower())
+    s = s.replace('–', '-').replace('—', '-')
+    s = re.sub(r'(>=|≥|>|\+|,|\s)', '', s)
+    nums = [p for p in s.split('-') if p != '']
+    if len(nums) == 1 and nums[0].isdigit() and int(nums[0]) > 0:
+        return int(nums[0]), None
+    if len(nums) == 2 and nums[0].isdigit() and nums[1].isdigit() and int(nums[0]) > 0 and int(nums[1]) > 0:
+        lo, hi = sorted((int(nums[0]), int(nums[1])))
+        return lo, hi
+    return None
 
 def save_lead_min(message):
     if menu_button_interrupt(message):
@@ -674,24 +690,27 @@ def save_lead_min(message):
         bot.send_message(message.chat.id, "❌ Cancelled.")
         send_main_menu(message.chat.id)
         return
-    digits = raw.replace(",", "").replace(" ", "").lstrip("≥>=")
-    if not digits.isdigit() or int(digits) <= 0:
-        bot.send_message(message.chat.id, "❌ Please send a whole number like 20000. Cancelled.")
+    parsed = _parse_follower_filter(raw)
+    if not parsed:
+        bot.send_message(message.chat.id,
+                         "❌ Please send a number like 20000, or a range like 7000-20000. Cancelled.")
         send_main_menu(message.chat.id)
         return
-    min_followers = int(digits)
+    min_followers, max_followers = parsed
     if _lead_scan_running.is_set():
         bot.send_message(message.chat.id, "A scan is already running — please wait for it to finish.")
         return
     _lead_scan_running.set()
-    threading.Thread(target=_run_lead_scan, args=(message.chat.id, min_followers), daemon=True).start()
+    threading.Thread(target=_run_lead_scan,
+                     args=(message.chat.id, min_followers, max_followers), daemon=True).start()
 
-def _run_lead_scan(chat_id, min_followers=8500):
+def _run_lead_scan(chat_id, min_followers=8500, max_followers=None):
     """Runs the X lead scraper in the background, shows a live progress bar, and delivers
     the Excel file. The admin can navigate away — the file is pushed when it's ready."""
     import tempfile, shutil, os, time as _time
     tmp = tempfile.mkdtemp(prefix="leads_")
     state = {"msg_id": None, "last_edit": 0.0}
+    range_label = f"{min_followers:,}–{max_followers:,}" if max_followers else f"≥{min_followers:,}"
     try:
         m = bot.send_message(chat_id, "🔎 <b>Lead scan started…</b>\nYou can leave this screen — "
                                       "the Excel file will be sent here automatically.", parse_mode='HTML')
@@ -710,7 +729,7 @@ def _run_lead_scan(chat_id, min_followers=8500):
                     f"🔎 <b>Scanning X for football leads…</b>\n"
                     f"{bar}  {qi}/{qtotal}\n"
                     f"Current: <code>{html.escape(query)}</code>\n"
-                    f"Scanned: <b>{scanned}</b>   |   Qualified (≥{min_followers:,}): <b>{qualified}</b>",
+                    f"Scanned: <b>{scanned}</b>   |   Qualified ({range_label}): <b>{qualified}</b>",
                     chat_id, state["msg_id"], parse_mode='HTML')
             except Exception:
                 pass  # ignore "message not modified" / transient edit errors
@@ -718,7 +737,8 @@ def _run_lead_scan(chat_id, min_followers=8500):
         import x_lead_scraper
         path = os.path.join(tmp, "x_football_leads.xlsx")
         count = x_lead_scraper.scan_to_file(path, min_followers=min_followers,
-                                            max_pages=2, progress_cb=progress)
+                                            max_followers=max_followers, max_pages=2,
+                                            progress_cb=progress)
         try:
             bot.edit_message_text(f"✅ <b>Scan complete</b> — {count} lead(s) found. Sending the Excel file…",
                                   chat_id, state["msg_id"], parse_mode='HTML')
@@ -730,7 +750,7 @@ def _run_lead_scan(chat_id, min_followers=8500):
         with open(path, "rb") as f:
             bot.send_document(
                 chat_id, f, visible_file_name="x_football_leads.xlsx",
-                caption=f"✅ {count} football X leads (≥{min_followers:,} followers)."
+                caption=f"✅ {count} football X leads ({range_label} followers)."
             )
     except Exception as e:
         logger.error(f"Lead scan failed: {e}")

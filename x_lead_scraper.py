@@ -104,13 +104,15 @@ async def _search_page(client, query, cursor_result):
     return None
 
 
-async def collect_accounts(client, queries, keywords, min_followers, max_pages, progress_cb=None):
+async def collect_accounts(client, queries, keywords, min_followers, max_pages,
+                           max_followers=None, progress_cb=None):
     """Discovers accounts across all queries, filters them, and returns unique rows.
-    If progress_cb is given, it is called after each page with
+    Keeps accounts with min_followers <= followers <= max_followers (max_followers=None
+    means no upper limit). If progress_cb is given, it is called after each page with
     (query_index, total_queries, query, scanned_count, qualified_count)."""
     seen_handles = set()
     results = []
-    stats = {"scanned": 0, "passed": 0, "low_followers": 0, "off_niche": 0}
+    stats = {"scanned": 0, "passed": 0, "low_followers": 0, "high_followers": 0, "off_niche": 0}
 
     for qi, query in enumerate(queries, 1):
         logger.info(f"=== Searching X users for: '{query}' ===")
@@ -135,6 +137,10 @@ async def collect_accounts(client, queries, keywords, min_followers, max_pages, 
                 if followers < min_followers:
                     logger.info(f"Scanning @{handle}... Skipped: low follower count ({followers:,})")
                     stats["low_followers"] += 1
+                    continue
+                if max_followers and followers > max_followers:
+                    logger.info(f"Scanning @{handle}... Skipped: above range ({followers:,})")
+                    stats["high_followers"] += 1
                     continue
                 if not matches_football(name, bio, keywords):
                     logger.info(f"Scanning @{handle}... Skipped: not in football niche")
@@ -162,7 +168,8 @@ async def collect_accounts(client, queries, keywords, min_followers, max_pages, 
 
     logger.info(
         f"Done. Scanned {stats['scanned']} | Passed {stats['passed']} | "
-        f"Skipped low-followers {stats['low_followers']} | Skipped off-niche {stats['off_niche']}"
+        f"Skipped low-followers {stats['low_followers']} | above-range {stats['high_followers']} | "
+        f"off-niche {stats['off_niche']}"
     )
     # Highest-follower leads first
     results.sort(key=lambda r: r["Follower Count"], reverse=True)
@@ -204,15 +211,15 @@ def export_results(rows, path):
 # Programmatic entry point (used by the Telegram bot button)
 # ---------------------------------------------------------------------------
 def scan_to_file(path, min_followers=MIN_FOLLOWERS, max_pages=MAX_PAGES_PER_QUERY,
-                 queries=None, progress_cb=None):
+                 queries=None, max_followers=None, progress_cb=None):
     """Runs a full scan synchronously and writes the results to `path` (.xlsx or .csv).
-    Returns the number of leads found (0 if none, in which case no file is written).
-    `progress_cb` (optional) is called during the scan for live progress updates.
+    Keeps accounts with min_followers <= followers <= max_followers (max_followers=None
+    means no upper limit). Returns the number of leads found (0 if none, no file written).
     Safe to call from a background thread — it creates its own event loop."""
     client = build_client()
     rows = asyncio.run(collect_accounts(
         client, queries or SEARCH_QUERIES, FOOTBALL_KEYWORDS, min_followers, max_pages,
-        progress_cb=progress_cb))
+        max_followers=max_followers, progress_cb=progress_cb))
     export_results(rows, path)
     return len(rows)
 
@@ -223,6 +230,8 @@ def scan_to_file(path, min_followers=MIN_FOLLOWERS, max_pages=MAX_PAGES_PER_QUER
 def parse_args():
     p = argparse.ArgumentParser(description="X (Twitter) football-niche lead scraper.")
     p.add_argument("--min-followers", type=int, default=MIN_FOLLOWERS)
+    p.add_argument("--max-followers", type=int, default=None,
+                   help="upper follower limit (omit for no cap)")
     p.add_argument("--max-pages", type=int, default=MAX_PAGES_PER_QUERY,
                    help="pages (~20 users each) per query")
     p.add_argument("--queries", type=str, default=None,
@@ -237,7 +246,8 @@ async def _run(args):
                 f"| queries={len(queries)} | output={args.output}")
     client = build_client()
     rows = await collect_accounts(client, queries, FOOTBALL_KEYWORDS,
-                                  args.min_followers, args.max_pages)
+                                  args.min_followers, args.max_pages,
+                                  max_followers=args.max_followers)
     export_results(rows, args.output)
 
 

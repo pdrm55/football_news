@@ -160,8 +160,9 @@ Finds new football X accounts for you — great for spotting accounts to follow 
 
 1. Tap **🔎 X Lead Finder**, then choose:
    - **▶️ Run Scan (≥ 8,500)** — quick scan with the default threshold, or
-   - **🔢 Custom Minimum…** — type your own follower minimum (e.g. `20000`) and it scans
-     for accounts at or above that number.
+   - **🔢 Custom Minimum…** — type your own follower filter: a single minimum (e.g.
+     `20000`) **or a range** like `7000-20000` (also `7000 to 20000`) to only get accounts
+     within that follower band.
 2. A **live progress bar** shows the scan working (`▰▰▰▱▱▱ 4/12`, accounts scanned,
    qualified count). **You can leave this screen** — the bot works in the background.
 3. When it finishes (a few minutes), the bot sends you an **Excel (.xlsx) file** with:
