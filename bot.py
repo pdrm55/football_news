@@ -7,7 +7,7 @@ import html
 import telebot
 from telebot.types import (
     InlineKeyboardMarkup, InlineKeyboardButton,
-    ReplyKeyboardMarkup, KeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton, CopyTextButton,
 )
 
 import config
@@ -99,13 +99,29 @@ def format_broadcast(summary: str, url: str) -> str:
         f"Source URL: {url}"
     )
 
+# Copy-to-clipboard button
+def build_copy_markup(summary: str) -> InlineKeyboardMarkup | None:
+    """Builds a one-tap '📋 Copy Text' button that copies the post text to the reader's
+    clipboard (Telegram copy_text button). Telegram caps copy_text at 256 chars, which
+    also keeps the copied text within X/Twitter's limit; longer summaries are trimmed at
+    a word boundary."""
+    text = (summary or "").strip()
+    if not text:
+        return None
+    if len(text) > 256:
+        text = text[:256].rsplit(' ', 1)[0].rstrip()
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("📋 Copy Text", copy_text=CopyTextButton(text=text)))
+    return markup
+
 # Broadcasting Layer
 def send_telegram_broadcast(summary: str, url: str, media_url: str | None, thread_id: int | None, art_id: int, team_tag: str | None) -> bool:
     """Delivers the post to Telegram as plain text. If thread_id fails (e.g. topic not found),
     it automatically falls back to sending directly to the main chat.
     """
     formatted_msg = format_broadcast(summary, url)
-    
+    copy_markup = build_copy_markup(summary)
+
     # Try photo first if media_url is provided
     if media_url:
         try:
@@ -113,7 +129,8 @@ def send_telegram_broadcast(summary: str, url: str, media_url: str | None, threa
                 chat_id=config.TELEGRAM_CHAT_ID,
                 photo=media_url,
                 caption=formatted_msg,
-                message_thread_id=thread_id
+                message_thread_id=thread_id,
+                reply_markup=copy_markup
             )
             logger.info(f"Successfully sent photo for article {art_id} to {team_tag} (thread: {thread_id})")
             return True
@@ -128,7 +145,8 @@ def send_telegram_broadcast(summary: str, url: str, media_url: str | None, threa
                         chat_id=config.TELEGRAM_CHAT_ID,
                         photo=media_url,
                         caption=formatted_msg,
-                        message_thread_id=None
+                        message_thread_id=None,
+                        reply_markup=copy_markup
                     )
                     logger.info(f"Successfully sent photo for article {art_id} to main chat.")
                     return True
@@ -143,7 +161,8 @@ def send_telegram_broadcast(summary: str, url: str, media_url: str | None, threa
         bot.send_message(
             chat_id=config.TELEGRAM_CHAT_ID,
             text=formatted_msg,
-            message_thread_id=thread_id
+            message_thread_id=thread_id,
+            reply_markup=copy_markup
         )
         logger.info(f"Successfully sent text for article {art_id} to {team_tag} (thread: {thread_id})")
         return True
@@ -157,7 +176,8 @@ def send_telegram_broadcast(summary: str, url: str, media_url: str | None, threa
                 bot.send_message(
                     chat_id=config.TELEGRAM_CHAT_ID,
                     text=formatted_msg,
-                    message_thread_id=None
+                    message_thread_id=None,
+                    reply_markup=copy_markup
                 )
                 logger.info(f"Successfully sent text for article {art_id} to main chat.")
                 return True
