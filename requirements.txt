@@ -57,3 +57,5 @@ webvtt-py==0.5.1
 # TikTok Monitor module
 yt-dlp==2026.06.09
 curl_cffi==0.15.0
+deep-translator
+langdetect

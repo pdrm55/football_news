@@ -14,6 +14,7 @@ import config
 import database
 import scraper
 import tiktok_monitor
+import translator
 
 # Initialize logging
 logger = logging.getLogger("bot")
@@ -297,7 +298,12 @@ def process_and_broadcast_pipeline():
             clean_chunk = clean_text_formatting(chunk)
             if not clean_chunk:
                 continue
-                
+
+            # X posts are raw (no Gemini): auto-translate non-English tweets to English
+            # via Google Translate, with a visible flag at the top of the post.
+            if source_type == 'x_account':
+                clean_chunk = translator.translate_for_broadcast(clean_chunk)
+
             thread_id = get_thread_id(team_tag)
             sent_successfully = send_telegram_broadcast(clean_chunk, url, media_url, thread_id, art_id, team_tag)
             
