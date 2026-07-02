@@ -181,33 +181,11 @@ You can tap and go — the file arrives automatically when it's ready.
 
 ## 12. Good to know
 
-- **Two admins:** both you and the developer can use the panel at the same time. System
-  alerts (e.g. "X session expired") go to your account.
 - **Timing:** news appears within a few minutes; the heavier protected sites are checked
   on a slightly slower cycle.
-- **Some UK sites are blocked on the server.** A few big sites (Telegraph, Daily Mail,
-  The Times, Mirror, Liverpool Echo, football.london, The Sun, GiveMeSport) block the
-  server's data-centre IP, so they can't be scraped there. Fixing them needs a residential
-  proxy — ask the developer if you want those sources back.
 - **Translation quality:** Google Translate is free and good, but not perfect — that's why
   translated posts carry the 🌐 flag.
 - **No duplicates, no fakes:** every item is de-duplicated, and the bot never invents
   content — if a source fails, it's simply skipped.
 
----
 
-## 13. Quick FAQ
-
-**Q: A tweet went to General instead of the Arsenal tab — why?**
-It didn't mention Arsenal (or an Arsenal player/keyword), so it was treated as unrelated.
-This is intentional, to keep the club tabs clean.
-
-**Q: An account I added isn't posting anything.**
-It may only be retweeting old posts, or hasn't posted in the last 24 hours. The bot only
-posts items from the last 24h.
-
-**Q: Can I get the Lead Finder to scan deeper / with a different follower count?**
-Yes — ask the developer to adjust the threshold or scan depth.
-
-**Q: Do I have to keep Telegram open during a scan or TikTok fetch?**
-No. Everything runs in the background and is delivered when ready.
