@@ -136,6 +136,7 @@ x.com in a browser, open DevTools → Application → Cookies, and copy the `aut
 |----------|-------------|
 | `GEMINI_MODEL` | Defaults to `gemini-2.0-flash`. Other options: `gemini-2.5-flash`, `gemini-2.5-pro` |
 | `THREAD_ID_ARSENAL` / `THREAD_ID_LIVERPOOL` / `THREAD_ID_INTER` | Forum topic IDs (leave blank to post to the main chat) |
+| `THREAD_ID_GENERAL` | Forum topic ID for the "General" tab — X posts not about any of the 3 clubs (e.g. Fabrizio Romano's unrelated tweets) are routed here to keep the club tabs clean |
 | `X_USERNAME` / `X_PASSWORD` / `X_EMAIL` | X/Twitter login (only if not using cookies) |
 | `PROXY_URL` | HTTP/SOCKS5 proxy for X, e.g. `socks5://12.34.56.78:1080` |
 | `X_INCLUDE_RETWEETS` | Include retweets from X accounts (default `true`); posts the original tweet's full text, de-duplicated by the original tweet |
