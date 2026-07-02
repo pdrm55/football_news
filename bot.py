@@ -639,15 +639,43 @@ def show_lead_finder_menu(chat_id, message_id):
     )
 
 def _run_lead_scan(chat_id, min_followers=8500):
-    """Runs the X lead scraper in the background and delivers the Excel file."""
-    import tempfile, shutil, os
+    """Runs the X lead scraper in the background, shows a live progress bar, and delivers
+    the Excel file. The admin can navigate away — the file is pushed when it's ready."""
+    import tempfile, shutil, os, time as _time
     tmp = tempfile.mkdtemp(prefix="leads_")
+    state = {"msg_id": None, "last_edit": 0.0}
     try:
-        bot.send_message(chat_id, "🔎 Lead scan started — this takes a few minutes. "
-                                  "I'll send the Excel file here when it's ready.")
+        m = bot.send_message(chat_id, "🔎 <b>Lead scan started…</b>\nYou can leave this screen — "
+                                      "the Excel file will be sent here automatically.", parse_mode='HTML')
+        state["msg_id"] = m.message_id
+
+        def progress(qi, qtotal, query, scanned, qualified):
+            # Throttle edits to respect Telegram's rate limits (~1/sec).
+            now = _time.time()
+            if now - state["last_edit"] < 3:
+                return
+            state["last_edit"] = now
+            filled = int(10 * qi / max(qtotal, 1))
+            bar = "▰" * filled + "▱" * (10 - filled)
+            try:
+                bot.edit_message_text(
+                    f"🔎 <b>Scanning X for football leads…</b>\n"
+                    f"{bar}  {qi}/{qtotal}\n"
+                    f"Current: <code>{html.escape(query)}</code>\n"
+                    f"Scanned: <b>{scanned}</b>   |   Qualified (≥{min_followers:,}): <b>{qualified}</b>",
+                    chat_id, state["msg_id"], parse_mode='HTML')
+            except Exception:
+                pass  # ignore "message not modified" / transient edit errors
+
         import x_lead_scraper
         path = os.path.join(tmp, "x_football_leads.xlsx")
-        count = x_lead_scraper.scan_to_file(path, min_followers=min_followers, max_pages=2)
+        count = x_lead_scraper.scan_to_file(path, min_followers=min_followers,
+                                            max_pages=2, progress_cb=progress)
+        try:
+            bot.edit_message_text(f"✅ <b>Scan complete</b> — {count} lead(s) found. Sending the Excel file…",
+                                  chat_id, state["msg_id"], parse_mode='HTML')
+        except Exception:
+            pass
         if not count or not os.path.exists(path):
             bot.send_message(chat_id, "No accounts matched the criteria this time. Try again later.")
             return

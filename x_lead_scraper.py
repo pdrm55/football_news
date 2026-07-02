@@ -104,13 +104,15 @@ async def _search_page(client, query, cursor_result):
     return None
 
 
-async def collect_accounts(client, queries, keywords, min_followers, max_pages):
-    """Discovers accounts across all queries, filters them, and returns unique rows."""
+async def collect_accounts(client, queries, keywords, min_followers, max_pages, progress_cb=None):
+    """Discovers accounts across all queries, filters them, and returns unique rows.
+    If progress_cb is given, it is called after each page with
+    (query_index, total_queries, query, scanned_count, qualified_count)."""
     seen_handles = set()
     results = []
     stats = {"scanned": 0, "passed": 0, "low_followers": 0, "off_niche": 0}
 
-    for query in queries:
+    for qi, query in enumerate(queries, 1):
         logger.info(f"=== Searching X users for: '{query}' ===")
         page = await _search_page(client, query, None)
         for page_num in range(max_pages):
@@ -148,6 +150,12 @@ async def collect_accounts(client, queries, keywords, min_followers, max_pages):
                     "Profile Bio": bio.replace("\n", " ").strip(),
                     "Profile Link": f"https://x.com/{handle}",
                 })
+
+            if progress_cb:
+                try:
+                    progress_cb(qi, len(queries), query, stats["scanned"], stats["passed"])
+                except Exception as e:
+                    logger.debug(f"progress_cb error: {e}")
 
             _sleep()  # pace between pages
             page = await _search_page(client, query, page)
@@ -195,13 +203,16 @@ def export_results(rows, path):
 # ---------------------------------------------------------------------------
 # Programmatic entry point (used by the Telegram bot button)
 # ---------------------------------------------------------------------------
-def scan_to_file(path, min_followers=MIN_FOLLOWERS, max_pages=MAX_PAGES_PER_QUERY, queries=None):
+def scan_to_file(path, min_followers=MIN_FOLLOWERS, max_pages=MAX_PAGES_PER_QUERY,
+                 queries=None, progress_cb=None):
     """Runs a full scan synchronously and writes the results to `path` (.xlsx or .csv).
     Returns the number of leads found (0 if none, in which case no file is written).
+    `progress_cb` (optional) is called during the scan for live progress updates.
     Safe to call from a background thread — it creates its own event loop."""
     client = build_client()
     rows = asyncio.run(collect_accounts(
-        client, queries or SEARCH_QUERIES, FOOTBALL_KEYWORDS, min_followers, max_pages))
+        client, queries or SEARCH_QUERIES, FOOTBALL_KEYWORDS, min_followers, max_pages,
+        progress_cb=progress_cb))
     export_results(rows, path)
     return len(rows)
 
