@@ -776,18 +776,26 @@ def run_tiktok_test(message):
     send_main_menu(message.chat.id)
 
 # Sources Views
-def _send_chunked_lines(chat_id, lines, limit=3900):
+def _send_chunked_lines(chat_id, lines, limit=3900, final_markup=None):
     """Sends pre-formatted HTML lines as one or more messages, each kept under
-    Telegram's 4096-char hard limit (which a long source list would exceed)."""
+    Telegram's 4096-char hard limit (which a long source list would exceed).
+    If final_markup is given, it's attached to the LAST message so action buttons
+    appear at the bottom of the list (no scrolling up). Returns the messages sent."""
+    chunks = []
     buf = ""
     for line in lines:
         if len(buf) + len(line) > limit:
             if buf:
-                bot.send_message(chat_id, buf, parse_mode='HTML')
+                chunks.append(buf)
             buf = ""
         buf += line
     if buf:
-        bot.send_message(chat_id, buf, parse_mode='HTML')
+        chunks.append(buf)
+
+    for i, chunk in enumerate(chunks):
+        markup = final_markup if i == len(chunks) - 1 else None
+        bot.send_message(chat_id, chunk, parse_mode='HTML', reply_markup=markup)
+    return len(chunks)
 
 def show_sources_menu(chat_id, message_id):
     markup = InlineKeyboardMarkup()
@@ -799,16 +807,18 @@ def show_sources_menu(chat_id, message_id):
 
     sources = database.get_sources()
 
-    # Keep the menu message itself short (with the buttons); the full list is sent
-    # separately and chunked, so it never hits Telegram's per-message length limit.
-    header = (f"📁 <b>Sources Manager</b>\n{len(sources)} source(s) registered."
-              if sources else "📁 <b>Sources Manager</b>\n<i>No sources registered yet.</i>")
-    bot.edit_message_text(header, chat_id, message_id, reply_markup=markup, parse_mode='HTML')
-
     if sources:
+        # Show the list first (chunked), then attach the action buttons to the LAST
+        # message so they sit at the bottom — no scrolling up on long lists.
+        header = f"📁 <b>Sources Manager</b>\n{len(sources)} source(s) registered. Actions are at the bottom ⬇️"
+        bot.edit_message_text(header, chat_id, message_id, parse_mode='HTML')
         lines = [f"• [{s['team_tag']}] <b>{s['type'].upper()}</b>: <code>{html.escape(s['value'])}</code>\n"
                  for s in sources]
-        _send_chunked_lines(chat_id, lines)
+        _send_chunked_lines(chat_id, lines, final_markup=markup)
+    else:
+        # No list: keep the buttons on the header message.
+        bot.edit_message_text("📁 <b>Sources Manager</b>\n<i>No sources registered yet.</i>",
+                              chat_id, message_id, reply_markup=markup, parse_mode='HTML')
 
 def show_add_source_types(chat_id, message_id):
     markup = InlineKeyboardMarkup()
