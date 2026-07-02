@@ -36,6 +36,12 @@ X_EMAIL = os.getenv("X_EMAIL")
 # Optional Proxy Configuration for Twikit (HTTP/SOCKS5)
 PROXY_URL = os.getenv("PROXY_URL")
 
+# Include retweets from monitored X accounts. Many curator/aggregator accounts (e.g. the
+# Arabic football accounts) mostly retweet rather than post originals, so with this off
+# they look empty. When on, the ORIGINAL tweet's full text is posted and de-duplicated by
+# the original tweet id (so the same post retweeted by several accounts appears once).
+X_INCLUDE_RETWEETS = os.getenv("X_INCLUDE_RETWEETS", "true").lower() in ("1", "true", "yes", "on")
+
 # TikTok Monitor module configuration
 # Where TikTok videos are posted. Defaults to the main chat; set TIKTOK_THREAD_ID to a
 # dedicated "TikTok" forum topic in the same group.

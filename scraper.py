@@ -148,34 +148,32 @@ class XScraper:
                 for t in tweets:
                     if len(result) >= limit:
                         break
-                        
-                    # Skip Retweets (RTs)
-                    is_retweet = False
-                    if t.text.strip().upper().startswith('RT ') or t.text.strip().upper().startswith('RT @'):
-                        is_retweet = True
-                    elif getattr(t, 'retweeted_status', None) is not None:
-                        is_retweet = True
-                        
-                    if is_retweet:
+
+                    # Detect retweets. twikit exposes the original as `retweeted_tweet`.
+                    rt = getattr(t, 'retweeted_tweet', None)
+                    is_retweet = rt is not None or t.text.strip().upper().startswith('RT ')
+
+                    if is_retweet and not config.X_INCLUDE_RETWEETS:
                         logger.info(f"Skipping Retweet from @{handle}: {t.text[:50]}...")
                         continue
-                        
-                    # Skip Replies
-                    is_reply = False
-                    if t.text.strip().startswith('@'):
-                        is_reply = True
-                    elif getattr(t, 'in_reply_to', None) is not None:
-                        is_reply = True
-                        
-                    if is_reply:
-                        logger.info(f"Skipping Reply tweet from @{handle}: {t.text[:50]}...")
+                    if is_retweet and rt is None:
+                        # A retweet we can't expand to the full original (would only have the
+                        # truncated "RT @user: ..." wrapper) — skip to keep posts clean.
+                        logger.info(f"Skipping unexpandable retweet from @{handle}: {t.text[:50]}...")
                         continue
-                        
-                    # Skip tweets older than 24 hours (or if they lack a creation date)
+
+                    # Skip Replies (only applies to original tweets; retweets are not replies)
+                    if not is_retweet:
+                        if t.text.strip().startswith('@') or getattr(t, 'in_reply_to', None) is not None:
+                            logger.info(f"Skipping Reply tweet from @{handle}: {t.text[:50]}...")
+                            continue
+
+                    # Skip items older than 24 hours. For a retweet this uses the retweet
+                    # time (when THIS account surfaced it), so active curators come through.
                     if not t.created_at:
                         logger.info(f"Skipping tweet from @{handle} - missing creation date.")
                         continue
-                        
+
                     try:
                         from email.utils import parsedate_to_datetime
                         import datetime
@@ -188,22 +186,35 @@ class XScraper:
                     except Exception as date_err:
                         logger.warning(f"Could not parse tweet date '{t.created_at}': {date_err}")
                         continue
-                        
-                    # Extract media if present
+
+                    # Resolve the source tweet: for a retweet, use the ORIGINAL tweet's full
+                    # text, author, id and media (post the complete original, not the
+                    # truncated wrapper) and de-duplicate by the original tweet id.
+                    if rt is not None:
+                        src = rt
+                        src_author = getattr(getattr(rt, 'user', None), 'screen_name', None) or handle
+                        content_text = getattr(rt, 'full_text', None) or rt.text or t.text
+                        title = f"Update from @{handle} (RT @{src_author})"
+                    else:
+                        src = t
+                        src_author = handle
+                        content_text = getattr(t, 'full_text', None) or t.text
+                        title = f"Update from @{handle}"
+
+                    # Extract media from the source tweet if present
                     media_url = None
-                    if hasattr(t, 'media') and t.media:
-                        for media in t.media:
-                            m_type = getattr(media, 'type', None)
-                            m_url = getattr(media, 'media_url', None)
-                            if m_type == 'photo' and m_url:
-                                media_url = m_url
+                    src_media = getattr(src, 'media', None)
+                    if src_media:
+                        for media in src_media:
+                            if getattr(media, 'type', None) == 'photo' and getattr(media, 'media_url', None):
+                                media_url = media.media_url
                                 break
-                    
-                    tweet_url = f"https://x.com/{handle}/status/{t.id}"
+
+                    tweet_url = f"https://x.com/{src_author}/status/{src.id}"
                     result.append({
                         'id': tweet_url,
-                        'title': f"Update from @{handle}",
-                        'content': t.text,
+                        'title': title,
+                        'content': content_text,
                         'media_url': media_url,
                         'url': tweet_url
                     })
