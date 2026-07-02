@@ -27,6 +27,9 @@ ADMIN_USER_ID_RAW = os.getenv("ADMIN_USER_ID")
 THREAD_ID_ARSENAL = os.getenv("THREAD_ID_ARSENAL")
 THREAD_ID_LIVERPOOL = os.getenv("THREAD_ID_LIVERPOOL")
 THREAD_ID_INTER = os.getenv("THREAD_ID_INTER")
+# "General" topic: X posts that aren't about any of the 3 clubs go here to keep the
+# club tabs clean (e.g. Fabrizio Romano's non-Arsenal/Liverpool/Inter tweets).
+THREAD_ID_GENERAL = os.getenv("THREAD_ID_GENERAL")
 
 # Optional X/Twitter Credentials for Twikit
 X_USERNAME = os.getenv("X_USERNAME")
@@ -73,6 +76,7 @@ def _parse_thread_id(val):
 THREAD_ID_ARSENAL = _parse_thread_id(THREAD_ID_ARSENAL)
 THREAD_ID_LIVERPOOL = _parse_thread_id(THREAD_ID_LIVERPOOL)
 THREAD_ID_INTER = _parse_thread_id(THREAD_ID_INTER)
+THREAD_ID_GENERAL = _parse_thread_id(THREAD_ID_GENERAL)
 TIKTOK_THREAD_ID = _parse_thread_id(TIKTOK_THREAD_ID)
 
 # Validation check

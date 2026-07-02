@@ -78,6 +78,8 @@ def get_thread_id(team_tag: str) -> int | None:
         return config.THREAD_ID_LIVERPOOL
     elif team_tag == 'Inter':
         return config.THREAD_ID_INTER
+    elif team_tag == 'General':
+        return config.THREAD_ID_GENERAL
     return None
 
 # Message Formatting
@@ -303,8 +305,15 @@ def process_and_broadcast_pipeline():
             # via Google Translate, with a visible flag at the top of the post.
             if source_type == 'x_account':
                 clean_chunk = translator.translate_for_broadcast(clean_chunk)
-
-            thread_id = get_thread_id(team_tag)
+                # Relevance-based routing: an account (e.g. Fabrizio Romano) may mix club
+                # news with lots of unrelated tweets. Keep the club tab only when the tweet
+                # is actually about that club; otherwise route it to the General tab so the
+                # Arsenal/Liverpool/Inter tabs stay noise-free. Detection runs on the
+                # translated text, so Arabic club mentions are matched too.
+                route_team = scraper.detect_team_from_text(title, clean_chunk, team_tag, allow_fallback=False)
+                thread_id = get_thread_id(route_team) if route_team else get_thread_id('General')
+            else:
+                thread_id = get_thread_id(team_tag)
             sent_successfully = send_telegram_broadcast(clean_chunk, url, media_url, thread_id, art_id, team_tag)
             
             if idx == 0:
