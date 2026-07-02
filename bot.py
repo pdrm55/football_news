@@ -109,6 +109,11 @@ def build_copy_markup(summary: str) -> InlineKeyboardMarkup | None:
     also keeps the copied text within X/Twitter's limit; longer summaries are trimmed at
     a word boundary."""
     text = (summary or "").strip()
+    # Drop the "🌐 Auto-translated…" flag line from the copied text — the reader copies
+    # this to repurpose on X, and shouldn't paste our translation notice.
+    if text.startswith(translator.TRANSLATION_FLAG):
+        parts = text.split("\n", 1)
+        text = parts[1].strip() if len(parts) > 1 else ""
     if not text:
         return None
     if len(text) > 256:
@@ -537,8 +542,12 @@ def handle_callbacks(call):
         show_lead_finder_menu(chat_id, message_id)
 
     elif data == "lead_run":
-        bot.answer_callback_query(call.id, "Lead scan started in background...")
-        threading.Thread(target=_run_lead_scan, args=(chat_id,), daemon=True).start()
+        if _lead_scan_running.is_set():
+            bot.answer_callback_query(call.id, "A scan is already running — please wait for it to finish.", show_alert=True)
+        else:
+            _lead_scan_running.set()
+            bot.answer_callback_query(call.id, "Lead scan started in background...")
+            threading.Thread(target=_run_lead_scan, args=(chat_id,), daemon=True).start()
         
     elif data == "update_x_cookies":
         prompt_auth_token(chat_id)
@@ -625,6 +634,8 @@ def run_manual_cycle(chat_id):
         bot.send_message(chat_id, f"❌ Manual scraper run failed: {e}")
 
 # X Lead Finder Flow
+_lead_scan_running = threading.Event()  # prevents overlapping scans hammering the X session
+
 def show_lead_finder_menu(chat_id, message_id):
     markup = InlineKeyboardMarkup()
     markup.row(InlineKeyboardButton("▶️ Run Scan Now", callback_data="lead_run"))
@@ -689,6 +700,7 @@ def _run_lead_scan(chat_id, min_followers=8500):
         bot.send_message(chat_id, f"⚠️ Lead scan failed: {e}")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+        _lead_scan_running.clear()
 
 # Test Source (read-only dry run) Flow
 pending_test_url = {}
