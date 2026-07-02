@@ -193,6 +193,20 @@ def export_results(rows, path):
 
 
 # ---------------------------------------------------------------------------
+# Programmatic entry point (used by the Telegram bot button)
+# ---------------------------------------------------------------------------
+def scan_to_file(path, min_followers=MIN_FOLLOWERS, max_pages=MAX_PAGES_PER_QUERY, queries=None):
+    """Runs a full scan synchronously and writes the results to `path` (.xlsx or .csv).
+    Returns the number of leads found (0 if none, in which case no file is written).
+    Safe to call from a background thread — it creates its own event loop."""
+    client = build_client()
+    rows = asyncio.run(collect_accounts(
+        client, queries or SEARCH_QUERIES, FOOTBALL_KEYWORDS, min_followers, max_pages))
+    export_results(rows, path)
+    return len(rows)
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 def parse_args():

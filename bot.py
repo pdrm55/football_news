@@ -483,6 +483,9 @@ def get_main_menu_markup():
     markup.row(
         InlineKeyboardButton("🎵 TikTok Monitor", callback_data="tt_menu")
     )
+    markup.row(
+        InlineKeyboardButton("🔎 X Lead Finder", callback_data="lead_finder")
+    )
     return markup
 
 
@@ -529,6 +532,13 @@ def handle_callbacks(call):
     elif data == "run_scr_now":
         bot.answer_callback_query(call.id, "Scraper and pipeline running in background...")
         threading.Thread(target=run_manual_cycle, args=(chat_id,)).start()
+
+    elif data == "lead_finder":
+        show_lead_finder_menu(chat_id, message_id)
+
+    elif data == "lead_run":
+        bot.answer_callback_query(call.id, "Lead scan started in background...")
+        threading.Thread(target=_run_lead_scan, args=(chat_id,), daemon=True).start()
         
     elif data == "update_x_cookies":
         prompt_auth_token(chat_id)
@@ -613,6 +623,44 @@ def run_manual_cycle(chat_id):
         bot.send_message(chat_id, "✅ Scraper ingestion and AI pipeline run completed.")
     except Exception as e:
         bot.send_message(chat_id, f"❌ Manual scraper run failed: {e}")
+
+# X Lead Finder Flow
+def show_lead_finder_menu(chat_id, message_id):
+    markup = InlineKeyboardMarkup()
+    markup.row(InlineKeyboardButton("▶️ Run Scan Now", callback_data="lead_run"))
+    markup.row(InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu"))
+    bot.edit_message_text(
+        "🔎 <b>X Lead Finder</b>\n"
+        "Scans X for football accounts with <b>8,500+</b> followers and sends you an "
+        "Excel sheet (Name, Handle, Followers, Bio, Profile Link).\n\n"
+        "A scan takes a few minutes (human-like delays keep the account safe). "
+        "Tap <b>Run Scan Now</b> to start.",
+        chat_id, message_id, reply_markup=markup, parse_mode='HTML'
+    )
+
+def _run_lead_scan(chat_id, min_followers=8500):
+    """Runs the X lead scraper in the background and delivers the Excel file."""
+    import tempfile, shutil, os
+    tmp = tempfile.mkdtemp(prefix="leads_")
+    try:
+        bot.send_message(chat_id, "🔎 Lead scan started — this takes a few minutes. "
+                                  "I'll send the Excel file here when it's ready.")
+        import x_lead_scraper
+        path = os.path.join(tmp, "x_football_leads.xlsx")
+        count = x_lead_scraper.scan_to_file(path, min_followers=min_followers, max_pages=2)
+        if not count or not os.path.exists(path):
+            bot.send_message(chat_id, "No accounts matched the criteria this time. Try again later.")
+            return
+        with open(path, "rb") as f:
+            bot.send_document(
+                chat_id, f, visible_file_name="x_football_leads.xlsx",
+                caption=f"✅ {count} football X leads (≥{min_followers:,} followers)."
+            )
+    except Exception as e:
+        logger.error(f"Lead scan failed: {e}")
+        bot.send_message(chat_id, f"⚠️ Lead scan failed: {e}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 # Test Source (read-only dry run) Flow
 pending_test_url = {}
