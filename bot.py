@@ -82,42 +82,40 @@ def get_thread_id(team_tag: str) -> int | None:
         return config.THREAD_ID_GENERAL
     return None
 
-# Message Formatting
-def format_broadcast(summary: str, url: str) -> str:
-    """Formats the news post using a clean, plain text layout without markdown or emojis."""
-    # Check if the unique identifier is a valid URL, otherwise omit the Source URL line
-    if not url or not (url.startswith('http://') or url.startswith('https://')):
-        return (
-            "BREAKING UPDATE\n"
-            "====================\n"
-            f"{summary}\n"
-            "===================="
-        )
-        
-    return (
-        "BREAKING UPDATE\n"
-        "====================\n"
-        f"{summary}\n"
-        "====================\n"
-        f"Source URL: {url}"
-    )
-
-# Copy-to-clipboard button
-def build_copy_markup(summary: str) -> InlineKeyboardMarkup | None:
-    """Builds a one-tap '📋 Copy Text' button that copies the post text to the reader's
-    clipboard (Telegram copy_text button). Telegram caps copy_text at 256 chars, which
-    also keeps the copied text within X/Twitter's limit; longer summaries are trimmed at
-    a word boundary."""
+# Copy text: the clean, full post text used for copying (translation flag stripped, since
+# the reader copies this to repost on X and shouldn't paste our translation notice).
+def copy_body(summary: str) -> str:
     text = (summary or "").strip()
-    # Drop the "🌐 Auto-translated…" flag line from the copied text — the reader copies
-    # this to repurpose on X, and shouldn't paste our translation notice.
     if text.startswith(translator.TRANSLATION_FLAG):
         parts = text.split("\n", 1)
         text = parts[1].strip() if len(parts) > 1 else ""
-    if not text:
+    return text
+
+# Message Formatting
+def format_broadcast(summary: str, url: str) -> str:
+    """Formats the news post (HTML): the readable text, the source URL, and a monospace
+    copy-block holding the FULL text. The <pre> block has Telegram's native one-tap copy,
+    which — unlike the copy_text button — has no 256-char limit, so nothing is left hanging."""
+    body = html.escape(summary or "")
+    lines = ["BREAKING UPDATE", "====================", body, "===================="]
+    if url and (url.startswith('http://') or url.startswith('https://')):
+        lines.append(f"Source URL: {html.escape(url)}")
+    msg = "\n".join(lines)
+
+    full = copy_body(summary)
+    if full:
+        msg += "\n\n📋 Copy:\n<pre>" + html.escape(full) + "</pre>"
+    return msg
+
+# Copy-to-clipboard button (kept for short posts as a quick one-tap; long posts are
+# fully covered by the copy-block in the message above, which has no length limit).
+def build_copy_markup(summary: str) -> InlineKeyboardMarkup | None:
+    """One-tap '📋 Copy Text' button (Telegram copy_text). It is capped at 256 chars by
+    Telegram, so it's only attached when the whole text fits — otherwise the message's
+    copy-block is the full-text path and we don't show a button that would truncate."""
+    text = copy_body(summary)
+    if not text or len(text) > 256:
         return None
-    if len(text) > 256:
-        text = text[:256].rsplit(' ', 1)[0].rstrip()
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("📋 Copy Text", copy_text=CopyTextButton(text=text)))
     return markup
@@ -138,7 +136,7 @@ def send_telegram_broadcast(summary: str, url: str, media_url: str | None, threa
                 photo=media_url,
                 caption=formatted_msg,
                 message_thread_id=thread_id,
-                reply_markup=copy_markup
+                reply_markup=copy_markup, parse_mode='HTML'
             )
             logger.info(f"Successfully sent photo for article {art_id} to {team_tag} (thread: {thread_id})")
             return True
@@ -185,7 +183,7 @@ def send_telegram_broadcast(summary: str, url: str, media_url: str | None, threa
                     chat_id=config.TELEGRAM_CHAT_ID,
                     text=formatted_msg,
                     message_thread_id=None,
-                    reply_markup=copy_markup
+                    reply_markup=copy_markup, parse_mode='HTML'
                 )
                 logger.info(f"Successfully sent text for article {art_id} to main chat.")
                 return True
