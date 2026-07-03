@@ -96,15 +96,18 @@ def format_broadcast(summary: str, url: str) -> str:
     """Formats the news post (HTML): the readable text, the source URL, and a monospace
     copy-block holding the FULL text. The <pre> block has Telegram's native one-tap copy,
     which — unlike the copy_text button — has no 256-char limit, so nothing is left hanging."""
-    body = html.escape(summary or "")
+    # Escape only &, <, > for HTML mode (quote=False keeps apostrophes/quotes as-is, so a
+    # quote like Gunners' is not turned into Gunners&#x27;). Also decode any HTML entities
+    # already present in the scraped text so nothing shows raw.
+    body = html.escape(html.unescape(summary or ""), quote=False)
     lines = ["BREAKING UPDATE", "====================", body, "===================="]
     if url and (url.startswith('http://') or url.startswith('https://')):
-        lines.append(f"Source URL: {html.escape(url)}")
+        lines.append(f"Source URL: {html.escape(url, quote=False)}")
     msg = "\n".join(lines)
 
-    full = copy_body(summary)
+    full = html.unescape(copy_body(summary))
     if full:
-        msg += "\n\n📋 Copy:\n<pre>" + html.escape(full) + "</pre>"
+        msg += "\n\n📋 Copy:\n<pre>" + html.escape(full, quote=False) + "</pre>"
     return msg
 
 # Copy-to-clipboard button (kept for short posts as a quick one-tap; long posts are
@@ -152,7 +155,7 @@ def send_telegram_broadcast(summary: str, url: str, media_url: str | None, threa
                         photo=media_url,
                         caption=formatted_msg,
                         message_thread_id=None,
-                        reply_markup=copy_markup
+                        reply_markup=copy_markup, parse_mode='HTML'
                     )
                     logger.info(f"Successfully sent photo for article {art_id} to main chat.")
                     return True
@@ -168,7 +171,7 @@ def send_telegram_broadcast(summary: str, url: str, media_url: str | None, threa
             chat_id=config.TELEGRAM_CHAT_ID,
             text=formatted_msg,
             message_thread_id=thread_id,
-            reply_markup=copy_markup
+            reply_markup=copy_markup, parse_mode='HTML'
         )
         logger.info(f"Successfully sent text for article {art_id} to {team_tag} (thread: {thread_id})")
         return True
