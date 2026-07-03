@@ -271,10 +271,14 @@ def process_and_broadcast_pipeline():
         media_url = art['media_url']
         url = art['unique_identifier']
         source_type = art.get('source_type')
-        
-        # 1. Skip Gemini for X/Twitter posts since they are already short/summarized
-        if source_type == 'x_account':
-            logger.info(f"Article {art_id} is from X/Twitter. Bypassing Gemini API and using raw text.")
+
+        # 1. Skip Gemini for sources that are ALREADY concise, self-contained updates:
+        #    - X/Twitter posts, and
+        #    - TransferFeed cards (each card is a complete, well-written transfer update;
+        #      re-summarizing it just compresses away the context — figures, contract
+        #      terms, sources — so we post the full card text as-is).
+        if source_type == 'x_account' or 'transferfeed.com' in (url or ''):
+            logger.info(f"Article {art_id} is a concise source (X/TransferFeed). Bypassing Gemini, using full text.")
             summary = content
         else:
             # 2. Summarize web page or RSS articles using Gemini
