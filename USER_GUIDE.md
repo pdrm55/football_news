@@ -43,8 +43,9 @@ BREAKING UPDATE
 Source URL: <link to the original article>
 ```
 
-- **📋 Copy Text button** — under every post. Tap it to copy the text straight to your
-  clipboard for reposting (e.g. on X). Long posts are trimmed to fit X's limit.
+- **📋 Copy block** — every post has a "📋 Copy:" block underneath. Tap its copy icon to
+  copy the **full** post text to your clipboard for reposting (e.g. on X) — no length
+  limit, nothing left out. (Short posts also get a quick one-tap Copy button.)
 - **Tweets** are posted as-is (not AI-summarised), so they stay in the author's words.
 - **Translation** — if a tweet is not in English (e.g. an Arabic account), it is
   auto-translated to English and marked with a **🌐 Auto-translated from …** flag at the

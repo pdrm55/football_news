@@ -21,7 +21,8 @@ touching the code.
   English via Google Translate with a visible "🌐 Auto-translated" flag.
 - **Per-club routing + General tab:** each club posts to its own Telegram forum topic;
   X posts not about any of the 3 clubs are routed to a **General** topic to cut noise.
-- **One-tap Copy:** every broadcast has a 📋 **Copy Text** button for quick reposting.
+- **One-tap Copy:** every broadcast includes a 📋 **Copy** block that copies the full post
+  text (no length limit) for quick reposting.
 - **Strict 24-hour freshness:** only items from the last 24h are posted.
 - **Club-relevance filter:** off-club / off-topic articles are dropped (no tennis news
   in the Arsenal channel).
