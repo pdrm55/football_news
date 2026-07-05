@@ -139,8 +139,10 @@ def build_metadata_block(handle: str, url: str, caption: str, comments: list[dic
     """Builds the raw text block posted with each video: original caption + top comments.
     No AI/summarization — verbatim content only."""
     lines = [f"🎵 @{handle}"]
-    if caption:
+    if caption and caption.strip():
         lines += ["", caption]
+    else:
+        lines += ["", "(No caption)"]
     if comments:
         lines += ["", "💬 Top comments:"]
         for i, c in enumerate(comments, 1):
