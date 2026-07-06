@@ -23,7 +23,7 @@ logger = logging.getLogger("scraper")
 # We import from the 'twikit' namespace because the fork maintains namespace compatibility.
 
 PROTECTED_DOMAINS = [
-    'nytimes.com', 'telegraph.co.uk',
+    'nytimes.com',
     'theguardian.com', 'independent.co.uk', 'standard.co.uk',
     'dailymail.com', 'dailymail.co.uk', 'skysports.com',
 ]
@@ -766,6 +766,52 @@ def fetch_via_proxy(url: str, timeout: int = 35) -> str | None:
     return None
 
 
+def extract_headlines_from_listing(listing_url: str, html_text: str) -> list[tuple[str, str]]:
+    """For hard-paywalled sites (Telegraph, The Times) we can't get the article body, so we
+    extract just (headline, article_url) pairs from the listing page. Telegraph exposes the
+    headline as the article link's text; The Times renders its list with JS, so we take the
+    article URLs and build a readable headline from the URL slug."""
+    if not html_text:
+        return []
+    from urllib.parse import urljoin, urlparse
+    domain = (urlparse(listing_url).netloc or '').lower()
+    out, seen = [], set()
+
+    if 'telegraph.co.uk' in domain:
+        soup = BeautifulSoup(html_text, 'html.parser')
+        for a in soup.find_all('a'):
+            href = a.get('href', '').strip()
+            if not href:
+                continue
+            full = urljoin(listing_url, href)
+            path = urlparse(full).path
+            if not _is_article_url('telegraph.co.uk', path) or full in seen:
+                continue
+            title = a.get_text(' ', strip=True)
+            if len(title) < 15:
+                continue
+            seen.add(full)
+            out.append((title, full))
+
+    elif 'thetimes' in domain:
+        for path in re.findall(r'/sport/football/(?:[a-z0-9\-]+/)*article/[a-z0-9\-]+', html_text):
+            full = urljoin('https://www.thetimes.com', path)
+            if full in seen:
+                continue
+            seen.add(full)
+            slug = path.rsplit('/article/', 1)[-1].split('/')[0]
+            words = slug.split('-')
+            # Drop the trailing short alphanumeric id token that The Times appends.
+            if words and len(words[-1]) <= 10 and any(c.isdigit() for c in words[-1]):
+                words = words[:-1]
+            title = ' '.join(w.capitalize() for w in words if w)
+            if len(title) < 15:
+                continue
+            out.append((title, full))
+
+    return out[:8]
+
+
 def _fetch_html(url: str, timeout: int = 10) -> str | None:
     """Fetches raw HTML. Proxy-listed domains go through the residential proxy; everything
     else uses a normal HTTP request."""
@@ -1248,6 +1294,23 @@ def run_scraper_ingestion(x_scraper=None, include_regular=True,
                             database.save_article(source_id, uid, title, content, web_image, detected_team)
                 except Exception as e:
                     logger.error(f"Error processing TransferFeed Hub {value}: {e}")
+            elif any(d in value.lower() for d in getattr(config, 'HEADLINE_ONLY_DOMAINS', [])):
+                # Hard-paywalled sites (Telegraph, The Times): we can only get the headline,
+                # not the article body. Extract (headline, url) from the listing and save
+                # each headline (bypasses Gemini downstream). No article fetch.
+                try:
+                    listing_html = _fetch_html(value)
+                    heads = extract_headlines_from_listing(value, listing_html) if listing_html else []
+                    logger.info(f"Extracted {len(heads)} headlines from paywalled source {value}")
+                    for hl_title, hl_url in heads:
+                        if database.article_exists(hl_url):
+                            continue
+                        detected = detect_team_from_text(hl_title, hl_title, team_tag, allow_fallback=False)
+                        if not detected:
+                            continue
+                        database.save_article(source_id, hl_url, hl_title, hl_title, None, detected)
+                except Exception as e:
+                    logger.error(f"Error processing paywalled headline source {value}: {e}")
             else:
                 # Treat a generic (non-Cloudflare) web_link as a feed/author/team page:
                 # extract its individual article links and ingest each one. Only if no

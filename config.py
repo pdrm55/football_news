@@ -48,11 +48,20 @@ PROXY_IMPERSONATE = os.getenv("PROXY_IMPERSONATE", "chrome131")
 PROXY_DOMAINS = [
     d.strip().lower() for d in os.getenv(
         "PROXY_DOMAINS",
-        "mirror.co.uk,liverpoolecho.co.uk,football.london,givemesport.com,thesun.co.uk"
+        "mirror.co.uk,liverpoolecho.co.uk,football.london,givemesport.com,thesun.co.uk,"
+        "telegraph.co.uk,thetimes.com"
     ).split(",") if d.strip()
 ]
 # Minimum seconds between proxy fetches of the same source (throttles metered proxy data).
 PROXY_MIN_INTERVAL_SECONDS = int(os.getenv("PROXY_MIN_INTERVAL_SECONDS", "1200"))
+
+# Hard-paywalled sites: the full article body is behind a subscription, so we only extract
+# and post the HEADLINE (+ link) from the listing page — no article fetch, no Gemini.
+HEADLINE_ONLY_DOMAINS = [
+    d.strip().lower() for d in os.getenv(
+        "HEADLINE_ONLY_DOMAINS", "telegraph.co.uk,thetimes.com,thetimes.co.uk"
+    ).split(",") if d.strip()
+]
 
 # Include retweets from monitored X accounts. Many curator/aggregator accounts (e.g. the
 # Arabic football accounts) mostly retweet rather than post originals, so with this off

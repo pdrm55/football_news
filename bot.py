@@ -277,8 +277,9 @@ def process_and_broadcast_pipeline():
         #    - TransferFeed cards (each card is a complete, well-written transfer update;
         #      re-summarizing it just compresses away the context — figures, contract
         #      terms, sources — so we post the full card text as-is).
-        if source_type == 'x_account' or 'transferfeed.com' in (url or ''):
-            logger.info(f"Article {art_id} is a concise source (X/TransferFeed). Bypassing Gemini, using full text.")
+        _headline_only = any(d in (url or '').lower() for d in getattr(config, 'HEADLINE_ONLY_DOMAINS', []))
+        if source_type == 'x_account' or 'transferfeed.com' in (url or '') or _headline_only:
+            logger.info(f"Article {art_id} is a concise/headline source. Bypassing Gemini, using full text.")
             summary = content
         else:
             # 2. Summarize web page or RSS articles using Gemini
