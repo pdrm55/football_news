@@ -48,7 +48,7 @@ PROXY_IMPERSONATE = os.getenv("PROXY_IMPERSONATE", "chrome131")
 PROXY_DOMAINS = [
     d.strip().lower() for d in os.getenv(
         "PROXY_DOMAINS",
-        "mirror.co.uk,liverpoolecho.co.uk,football.london,givemesport.com"
+        "mirror.co.uk,liverpoolecho.co.uk,football.london,givemesport.com,thesun.co.uk"
     ).split(",") if d.strip()
 ]
 # Minimum seconds between proxy fetches of the same source (throttles metered proxy data).

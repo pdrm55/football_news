@@ -23,9 +23,9 @@ logger = logging.getLogger("scraper")
 # We import from the 'twikit' namespace because the fork maintains namespace compatibility.
 
 PROTECTED_DOMAINS = [
-    'nytimes.com', 'thetimes.com', 'telegraph.co.uk',
+    'nytimes.com', 'telegraph.co.uk',
     'theguardian.com', 'independent.co.uk', 'standard.co.uk',
-    'dailymail.com', 'dailymail.co.uk', 'thesun.co.uk', 'skysports.com',
+    'dailymail.com', 'dailymail.co.uk', 'skysports.com',
 ]
 # Note: mirror.co.uk, liverpoolecho.co.uk (and football.london, givemesport.com) are
 # handled via the residential HTTP proxy path (config.PROXY_DOMAINS), not the browser.
@@ -506,7 +506,7 @@ _FEED_CONTAINER_SELECTORS = {
     'skysports.com': ['.news-list', '.sdc-site-tiles', '.page__main', 'main'],
     'mirror.co.uk': ['.publication-body', '[data-component="ArticleList"]', 'main'],
     'liverpoolecho.co.uk': ['.publication-body', '[data-component="ArticleList"]', 'main'],
-    'thesun.co.uk': ['.sun-row', '.teadit', '.feed', 'main', '#content'],
+    'thesun.co.uk': ['.story__copy-container', '.sun-row', '.teadit', '.feed', 'main', '#content'],
     'teamtalk.com': ['.archive-list', '.posts', 'main', '#main', '.site-main'],
     'dailymail.co.uk': ['.author-articles', '#content', 'main'],
     'dailymail.com': ['.author-articles', '#content', 'main'],
@@ -625,11 +625,10 @@ def _is_article_url(author_domain: str, url_path: str) -> bool:
         return '/football/' in url_path and '/article-' in url_path and url_path.endswith('.html')
 
     if 'thesun.co.uk' in author_domain:
-        # Require /football/ so /sport/<id>/... tennis/other-sport articles are excluded.
-        if '/football/' in url_path:
-            parts = [p for p in url_path.split('/') if p]
-            return len(parts) >= 3 and any(p.isdigit() for p in parts)
-        return False
+        # The Sun sport articles are /sport/<numeric-id>/<headline-slug>/. Football and
+        # other sports share this path, but we only scan the football writer's feed
+        # container and the club-relevance filter drops anything off-club.
+        return bool(re.search(r'/sport/\d{5,}/[a-z0-9-]+', url_path))
 
     if 'skysports.com' in author_domain:
         return '/football/news/' in url_path
@@ -692,10 +691,24 @@ def extract_articles_from_author_page(author_url: str, html_text: str) -> list[s
 
     from urllib.parse import urljoin, urlparse, urldefrag
 
-    soup = BeautifulSoup(html_text, 'html.parser')
     parsed_author = urlparse(author_url)
     author_domain = parsed_author.netloc.lower()
 
+    # The Times renders its article list with JavaScript, but the article URLs are embedded
+    # in the page's JSON payload. Extract them by pattern rather than from <a> tags.
+    if 'thetimes.com' in author_domain or 'thetimes.co.uk' in author_domain:
+        paths = re.findall(r'/sport/football/(?:[a-z0-9\-]+/)*article/[a-z0-9\-]+', html_text)
+        out, seen = [], set()
+        for p in paths:
+            u = urljoin('https://www.thetimes.com', p)
+            if u not in seen:
+                seen.add(u)
+                out.append(u)
+            if len(out) >= 5:
+                break
+        return out
+
+    soup = BeautifulSoup(html_text, 'html.parser')
     containers = _resolve_feed_containers(soup, author_domain)
 
     links = []
