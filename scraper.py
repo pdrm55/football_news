@@ -402,9 +402,16 @@ def scrape_transferfeed_latest(url: str) -> tuple[str | None, str | None, str | 
                           '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Referer': 'https://www.google.com/',
         }
-        res = requests.get(url, headers=headers, timeout=12)
-        if res.status_code != 200:
-            logger.warning(f"Failed to fetch TransferFeed page {url}: status {res.status_code}")
+        res = None
+        for attempt in range(2):  # TransferFeed pages are heavy; retry once on timeout
+            try:
+                res = requests.get(url, headers=headers, timeout=25)
+                break
+            except requests.exceptions.RequestException:
+                if attempt == 1:
+                    raise
+        if not res or res.status_code != 200:
+            logger.warning(f"Failed to fetch TransferFeed page {url}: status {res.status_code if res else 'none'}")
             return None, None, None
         soup = BeautifulSoup(res.text, 'html.parser')
 
@@ -412,7 +419,15 @@ def scrape_transferfeed_latest(url: str) -> tuple[str | None, str | None, str | 
         title = title_tag.get_text().strip().replace(' - TransferFeed', '') if title_tag else None
 
         cards = soup.select('.transfer-news-card')
-        latest = cards[0].get_text(' ', strip=True) if cards else None
+        latest = None
+        if cards:
+            # The update text is in .card-body; using it avoids the card's header
+            # (player name, "6h ago", arrow) and any "... MORE" preview markers.
+            body = cards[0].select_one('.card-body')
+            latest = (body or cards[0]).get_text(' ', strip=True)
+            # Safety: strip a leading "Name 6h ago ->" prefix and a trailing "... MORE".
+            latest = re.sub(r'^.*?\d+\s*[hmd]\s*ago\s*(?:→|->)\s*', '', latest, flags=re.I).strip()
+            latest = re.sub(r'\s*(?:\.{2,}|…)\s*more\s*$', '', latest, flags=re.I).strip()
 
         image = None
         og = soup.find('meta', property='og:image')
@@ -1278,9 +1293,13 @@ def run_scraper_ingestion(x_scraper=None, include_regular=True,
                         import hashlib
                         for title_text, rumour_url in items[:5]:
                             web_title, latest_update, web_image = scrape_transferfeed_latest(rumour_url)
-                            content = latest_update if latest_update else title_text
-                            if not content:
+                            # Only post the full card text. The club-page link text is a
+                            # truncated preview ("Name 6h ago -> ... MORE"); if the card
+                            # fetch failed, skip and retry next cycle instead of posting it.
+                            if not latest_update:
+                                logger.info(f"TransferFeed: no full update for {rumour_url}; skipping this cycle.")
                                 continue
+                            content = latest_update
                             sig = hashlib.md5(content.strip().lower().encode('utf-8')).hexdigest()[:10]
                             uid = f"{rumour_url}#{sig}"
                             if database.article_exists(uid):
