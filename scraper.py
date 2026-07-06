@@ -30,6 +30,9 @@ PROTECTED_DOMAINS = [
 # Note: mirror.co.uk, liverpoolecho.co.uk (and football.london, givemesport.com) are
 # handled via the residential HTTP proxy path (config.PROXY_DOMAINS), not the browser.
 
+# Last-fetch time per proxy-routed source URL, to throttle metered proxy traffic.
+_proxy_last_fetch = {}
+
 # Domains that are not Cloudflare-blocked but render their article feed with
 # client-side JavaScript, so plain requests returns no article links. These are
 # routed through the headless-browser (DrissionPage) path just like protected sites.
@@ -1130,7 +1133,16 @@ def run_scraper_ingestion(x_scraper=None, include_regular=True,
         source_type = src['type']
         value = src['value']
         team_tag = src['team_tag']
-        
+
+        # Data optimisation: proxy-routed domains are metered (residential proxy), so don't
+        # re-fetch them on every fast cycle — throttle to PROXY_MIN_INTERVAL_SECONDS.
+        if _domain_uses_proxy(value):
+            import time as _t
+            if _t.time() - _proxy_last_fetch.get(value, 0) < getattr(config, 'PROXY_MIN_INTERVAL_SECONDS', 1200):
+                logger.info(f"Throttling proxy source (recently fetched): {value}")
+                continue
+            _proxy_last_fetch[value] = _t.time()
+
         logger.info(f"Scraping source: {source_type} - {value} ({team_tag})")
         
         if source_type == 'rss':

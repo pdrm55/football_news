@@ -51,6 +51,8 @@ PROXY_DOMAINS = [
         "mirror.co.uk,liverpoolecho.co.uk,football.london,givemesport.com"
     ).split(",") if d.strip()
 ]
+# Minimum seconds between proxy fetches of the same source (throttles metered proxy data).
+PROXY_MIN_INTERVAL_SECONDS = int(os.getenv("PROXY_MIN_INTERVAL_SECONDS", "1200"))
 
 # Include retweets from monitored X accounts. Many curator/aggregator accounts (e.g. the
 # Arabic football accounts) mostly retweet rather than post originals, so with this off
