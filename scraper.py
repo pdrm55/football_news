@@ -26,8 +26,9 @@ PROTECTED_DOMAINS = [
     'nytimes.com', 'thetimes.com', 'telegraph.co.uk',
     'theguardian.com', 'independent.co.uk', 'standard.co.uk',
     'dailymail.com', 'dailymail.co.uk', 'thesun.co.uk', 'skysports.com',
-    'liverpoolecho.co.uk', 'mirror.co.uk'
 ]
+# Note: mirror.co.uk, liverpoolecho.co.uk (and football.london, givemesport.com) are
+# handled via the residential HTTP proxy path (config.PROXY_DOMAINS), not the browser.
 
 # Domains that are not Cloudflare-blocked but render their article feed with
 # client-side JavaScript, so plain requests returns no article links. These are
@@ -369,6 +370,10 @@ def scrape_web_page(url: str) -> tuple[str | None, str | None, str | None]:
     Returns: (title, main_content_text, image_url)
     """
     try:
+        # Proxy-listed domains (Reach plc etc.) are fetched through the residential proxy.
+        if _domain_uses_proxy(url):
+            html = fetch_via_proxy(url)
+            return parse_article_html(html) if html else (None, None, None)
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
@@ -376,7 +381,7 @@ def scrape_web_page(url: str) -> tuple[str | None, str | None, str | None]:
         if response.status_code != 200:
             logger.warning(f"Failed to fetch {url}, status code: {response.status_code}")
             return None, None, None
-            
+
         return parse_article_html(response.content)
     except Exception as e:
         logger.error(f"Error scraping web page {url}: {e}")
@@ -716,8 +721,40 @@ def extract_articles_from_author_page(author_url: str, html_text: str) -> list[s
     return links[:5]
 
 
+def _domain_uses_proxy(url: str) -> bool:
+    """True if this URL's domain should be fetched through the residential scraping proxy."""
+    if not getattr(config, 'SCRAPER_PROXY_URL', None):
+        return False
+    from urllib.parse import urlparse
+    domain = (urlparse(url).netloc or '').lower()
+    return any(d in domain for d in getattr(config, 'PROXY_DOMAINS', []))
+
+
+def fetch_via_proxy(url: str, timeout: int = 35) -> str | None:
+    """Fetches a URL through the residential proxy using curl_cffi with a browser TLS
+    fingerprint (the WAFs on these sites block the datacenter IP AND the default TLS, so we
+    need both a residential IP and a browser-like handshake). HTML only — no assets — so
+    proxy data stays low. Returns HTML on 200, else None."""
+    try:
+        from curl_cffi import requests as cffi
+        proxies = {'http': config.SCRAPER_PROXY_URL, 'https': config.SCRAPER_PROXY_URL}
+        res = cffi.get(
+            url, impersonate=config.PROXY_IMPERSONATE, proxies=proxies, timeout=timeout,
+            headers={'Accept-Language': 'en-GB,en;q=0.9'},
+        )
+        if res.status_code == 200:
+            return res.text
+        logger.warning(f"Proxy fetch failed for {url}, status code: {res.status_code}")
+    except Exception as e:
+        logger.error(f"Error proxy-fetching {url}: {e}")
+    return None
+
+
 def _fetch_html(url: str, timeout: int = 10) -> str | None:
-    """Fetches raw HTML via a normal HTTP request (for non-Cloudflare pages)."""
+    """Fetches raw HTML. Proxy-listed domains go through the residential proxy; everything
+    else uses a normal HTTP request."""
+    if _domain_uses_proxy(url):
+        return fetch_via_proxy(url, timeout=max(timeout, 35))
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
@@ -1098,7 +1135,13 @@ def run_scraper_ingestion(x_scraper=None, include_regular=True,
         
         if source_type == 'rss':
             try:
-                feed = feedparser.parse(value)
+                # Proxy-listed feeds (e.g. mirror.co.uk RSS) are blocked for the datacenter
+                # IP, so fetch the feed XML through the residential proxy, then parse it.
+                if _domain_uses_proxy(value):
+                    feed_xml = fetch_via_proxy(value)
+                    feed = feedparser.parse(feed_xml) if feed_xml else feedparser.parse(value)
+                else:
+                    feed = feedparser.parse(value)
                 for entry in feed.entries[:5]:  # Process top 5 entries
                     link = entry.get('link')
                     unique_id = link

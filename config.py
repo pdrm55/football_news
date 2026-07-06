@@ -39,6 +39,19 @@ X_EMAIL = os.getenv("X_EMAIL")
 # Optional Proxy Configuration for Twikit (HTTP/SOCKS5)
 PROXY_URL = os.getenv("PROXY_URL")
 
+# Residential scraping proxy for sites that block the server's datacenter IP (Reach plc /
+# CloudFront / Akamai). ONLY the domains in PROXY_DOMAINS are routed through it, and only
+# via HTTP (curl_cffi with a browser TLS fingerprint the WAFs accept) — not a browser — so
+# proxy data stays minimal. Set SCRAPER_PROXY_URL in .env to enable.
+SCRAPER_PROXY_URL = os.getenv("SCRAPER_PROXY_URL")
+PROXY_IMPERSONATE = os.getenv("PROXY_IMPERSONATE", "chrome131")
+PROXY_DOMAINS = [
+    d.strip().lower() for d in os.getenv(
+        "PROXY_DOMAINS",
+        "mirror.co.uk,liverpoolecho.co.uk,football.london,givemesport.com"
+    ).split(",") if d.strip()
+]
+
 # Include retweets from monitored X accounts. Many curator/aggregator accounts (e.g. the
 # Arabic football accounts) mostly retweet rather than post originals, so with this off
 # they look empty. When on, the ORIGINAL tweet's full text is posted and de-duplicated by
