@@ -1341,11 +1341,18 @@ def run_scraper_ingestion(x_scraper=None, include_regular=True,
                 if article_urls:
                     logger.info(f"Found {len(article_urls)} feed articles on {value}")
                     _ingest_feed_article_urls(article_urls, source_id, team_tag, allow_fallback=False)
-                elif not database.article_exists(value):
+                elif _is_article_url(urllib.parse.urlparse(value).netloc.lower(), urllib.parse.urlparse(value).path) \
+                        and not database.article_exists(value):
+                    # Fall back to scraping the URL itself ONLY when it is a direct single
+                    # article. Never scrape a section/author/team listing page as one giant
+                    # "article" — that produced dozens of fragmented talking points from the
+                    # page's mixed content (the football.london issue).
                     title, content, image_url = scrape_web_page(value)
                     if title or content:
                         detected_team = detect_team_from_text(title, content, team_tag)
                         database.save_article(source_id, value, title, content, image_url, detected_team)
+                elif not article_urls:
+                    logger.info(f"No article links found on {value} this cycle; skipping (not scraping the listing as an article).")
                     
         elif source_type == 'x_account':
             try:
