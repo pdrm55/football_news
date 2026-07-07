@@ -123,13 +123,50 @@ def build_copy_markup(summary: str) -> InlineKeyboardMarkup | None:
     markup.add(InlineKeyboardButton("📋 Copy Text", copy_text=CopyTextButton(text=text)))
     return markup
 
+def build_post_markup(summary: str) -> InlineKeyboardMarkup:
+    """Inline keyboard shown under every news post: a one-tap Copy button (short posts only)
+    plus the admin-only 'Generate Promo Subtweet' button."""
+    markup = InlineKeyboardMarkup()
+    text = copy_body(summary)
+    if text and len(text) <= 256:
+        markup.add(InlineKeyboardButton("📋 Copy Text", copy_text=CopyTextButton(text=text)))
+    markup.add(InlineKeyboardButton("📊 Generate Promo Subtweet", callback_data="gen_promo"))
+    return markup
+
+def _extract_news_text(message) -> str:
+    """Pulls the news summary out of a broadcast message for the promo generator."""
+    text = (getattr(message, 'text', None) or getattr(message, 'caption', None) or "").strip()
+    # Our posts are "BREAKING UPDATE\n====\n<summary>\n====\nSource URL...". Take the block
+    # between the first two separators; fall back to the whole text.
+    parts = text.split("====================")
+    if len(parts) >= 2 and parts[1].strip():
+        return parts[1].strip()
+    return text
+
+def _run_promo_generation(message):
+    """Background: generate a goaldata.com promo subtweet from a news post and reply to it."""
+    try:
+        news_text = _extract_news_text(message)
+        if not news_text:
+            return
+        promo = scraper.generate_promo_subtweet(news_text)
+        thread_id = getattr(message, 'message_thread_id', None)
+        if not promo:
+            bot.send_message(message.chat.id, "⚠️ Could not generate a promo for this post.",
+                             message_thread_id=thread_id, reply_to_message_id=message.message_id)
+            return
+        bot.send_message(message.chat.id, promo, message_thread_id=thread_id,
+                         reply_to_message_id=message.message_id)
+    except Exception as e:
+        logger.error(f"Promo generation delivery failed: {e}")
+
 # Broadcasting Layer
 def send_telegram_broadcast(summary: str, url: str, media_url: str | None, thread_id: int | None, art_id: int, team_tag: str | None) -> bool:
     """Delivers the post to Telegram as plain text. If thread_id fails (e.g. topic not found),
     it automatically falls back to sending directly to the main chat.
     """
     formatted_msg = format_broadcast(summary, url)
-    copy_markup = build_copy_markup(summary)
+    copy_markup = build_post_markup(summary)  # Copy (short posts) + Generate Promo Subtweet
 
     # Try photo first if media_url is provided
     if media_url:
@@ -531,9 +568,15 @@ def handle_callbacks(call):
     message_id = call.message.message_id
     data = call.data
 
-    if data == "main_menu":
+    if data == "gen_promo":
+        # Admin-only (enforced by the is_admin gate above): generate a goaldata.com promo
+        # subtweet from this news post and reply to it in the channel.
+        bot.answer_callback_query(call.id, "Generating promo draft…")
+        threading.Thread(target=_run_promo_generation, args=(call.message,), daemon=True).start()
+
+    elif data == "main_menu":
         edit_to_main_menu(chat_id, message_id)
-        
+
     elif data == "manage_sources":
         show_sources_menu(chat_id, message_id)
         

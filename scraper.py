@@ -1114,6 +1114,89 @@ def run_gemini_summarizer(title: str, content: str, active_filters: list[str]) -
         return None
 
 
+def generate_promo_subtweet(news_text: str) -> str | None:
+    """On-demand: turn a news post into a promotional X/Twitter subtweet draft for
+    goaldata.com. Detects the football entities and picks ONE of many distinct structural
+    hooks at random (anti-spam variance). Stats are left as {Insert} placeholders for the
+    user to fill, and a media-attachment indicator is included. Returns the draft text."""
+    if not news_text or not news_text.strip():
+        return None
+    import random
+    client = genai.Client(api_key=config.GEMINI_API_KEY)
+
+    system_instruction = (
+        "You are a growth-marketing copywriter for goaldata.com, a FREE website offering "
+        "advanced football player data, metrics and comparison radars (a free FBREF/"
+        "alternative). Your job: from the supplied news text, craft ONE ready-to-post X "
+        "(Twitter) promotional 'subtweet' draft that ties the news to goaldata.com.\n\n"
+        "STEP 1 - ENTITY DETECTION:\n"
+        "- Identify the football entities in the news: player names and clubs. Managers/"
+        "pundits/officials do NOT count as players.\n"
+        "- Choose the scenario by how many PLAYERS you found:\n"
+        "  * TWO or more players -> SCENARIO A: a head-to-head comparison of two of them.\n"
+        "  * EXACTLY ONE player -> SCENARIO B: a single-player deep-dive on that player.\n"
+        "  * NO player (club/manager/fixture news only) -> SCENARIO C: a club/team-focused "
+        "angle built around the club(s) in the news (no player comparison).\n\n"
+        "STEP 2 - PICK A RANDOM HOOK (ANTI-SPAM):\n"
+        "- To avoid X spam detection, you MUST randomly choose ONE structural hook from the "
+        "list below and vary the exact wording every time. Never reuse the same template "
+        "shape twice in a row. Available hooks:\n"
+        "  1. FBREF ALTERNATIVE: \"Looking for a free FBREF alternative to view advanced "
+        "player data? ...\"\n"
+        "  2. TRANSFER DEBATE: \"[Player 1] vs [Player 2] - who is actually the better "
+        "signing for [Club]? Let's check the data...\"\n"
+        "  3. CONTEXTUAL DEEP-DIVE: \"Before club-to-club talks initiate for [Player 1], the "
+        "underlying metrics on goaldata.com reveal everything...\"\n"
+        "  4. BOLD STAT TEASE: \"The underlying numbers behind [Player]'s season might change "
+        "your mind...\"\n"
+        "  5. QUESTION HOOK: \"Is [Player] actually worth [Club]'s money? The advanced "
+        "metrics tell the real story...\"\n"
+        "  6. SCOUT REPORT: \"Scouting [Player]: here is what the data on goaldata.com "
+        "actually shows...\"\n"
+        "  7. RADAR/VISUAL TEASE: \"[Player 1] vs [Player 2] player radars - the comparison "
+        "every [Club] fan needs to see...\"\n"
+        "  8. MYTH-BUSTER: \"Everyone is talking about [Player], but the data tells a "
+        "different story...\"\n\n"
+        "STEP 3 - STATS PLACEHOLDERS (do NOT invent numbers):\n"
+        "- Include a short block of 2-4 metric lines, each with a relevant emoji and a "
+        "{Insert} placeholder the user will fill in manually. For a comparison use two "
+        "columns. Examples of the exact style:\n"
+        "  ⚽ [Player 1] Non-Penalty xG: {Insert} | [Player 2]: {Insert}\n"
+        "  \U0001f3c3‍♂️ [Player 1] Successful Dribbles %: {Insert} | [Player 2]: {Insert}\n"
+        "- For a single player or a club, use single-value placeholders (e.g. "
+        "⚽ Non-Penalty xG: {Insert}).\n\n"
+        "STEP 4 - CTA + MEDIA:\n"
+        "- End with a strong call-to-action promoting goaldata.com, varied each time (e.g. "
+        "\"Compare player radars & metrics for FREE on goaldata.com\").\n"
+        "- On the final line add a media-attachment indicator exactly like: "
+        "\U0001f4ce [Attach your goaldata.com radar/screenshot or GIF here]\n\n"
+        "OUTPUT RULES:\n"
+        "- Output ONLY the finished draft, ready to copy-paste. No preamble, no explanation, "
+        "no 'Here is your draft', no option lists, no markdown code fences.\n"
+        "- Keep it punchy and X-appropriate. A couple of hashtags are fine. Emojis are "
+        "allowed here (this is a marketing post, unlike the news feed).\n"
+        "- Use the real player/club names from the news, not the bracket placeholders."
+    )
+
+    prompt = (
+        f"Variance token (use it to pick a different hook than last time): {random.randint(1000, 9999)}\n\n"
+        f"NEWS TEXT:\n{news_text.strip()}"
+    )
+    try:
+        response = client.models.generate_content(
+            model=config.GEMINI_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=1.15,
+            ),
+        )
+        return response.text.strip() if response and response.text else None
+    except Exception as e:
+        logger.error(f"Promo generation error: {e}")
+        return None
+
+
 def detect_team_from_text(title: str, content: str, default_tag: str | None, allow_fallback: bool = True) -> str | None:
     """Analyzes the text content to dynamically assign the correct team tag.
     To prevent club mixing and cross-posting, it only checks keywords for the source's designated default_tag.
