@@ -1115,86 +1115,118 @@ def run_gemini_summarizer(title: str, content: str, active_filters: list[str]) -
 
 
 def generate_promo_subtweet(news_text: str) -> str | None:
-    """On-demand: turn a news post into a promotional X/Twitter subtweet draft for
-    goaldata.com. Detects the football entities and picks ONE of many distinct structural
-    hooks at random (anti-spam variance). Stats are left as {Insert} placeholders for the
-    user to fill, and a media-attachment indicator is included. Returns the draft text."""
+    """On-demand: turn a news post into TWO promotional X sub-tweet variations for
+    goaldata.com. Human, natural analyst voice (no AI cliches), a tight narrative arc,
+    emoji {Insert} metric placeholders, broken link, and specific product CTAs. Returns the
+    two labelled variations as text."""
     if not news_text or not news_text.strip():
         return None
     import random
     client = genai.Client(api_key=config.GEMINI_API_KEY)
 
     system_instruction = (
-        "You are a growth-marketing copywriter for goaldata.com, a FREE website offering "
-        "advanced football player data, metrics and comparison radars (a free FBREF/"
-        "alternative). Your job: from the supplied news text, craft ONE ready-to-post X "
-        "(Twitter) promotional 'subtweet' draft that ties the news to goaldata.com.\n\n"
-        "STEP 1 - ENTITY DETECTION:\n"
-        "- Identify the football entities in the news: player names and clubs. Managers/"
-        "pundits/officials do NOT count as players.\n"
-        "- Choose the scenario by how many PLAYERS you found:\n"
-        "  * TWO or more players -> SCENARIO A: a head-to-head comparison of two of them.\n"
-        "  * EXACTLY ONE player -> SCENARIO B: a single-player deep-dive on that player.\n"
-        "  * NO player (club/manager/fixture news only) -> SCENARIO C: a club/team-focused "
-        "angle built around the club(s) in the news (no player comparison).\n\n"
-        "STEP 2 - PICK A RANDOM HOOK (ANTI-SPAM):\n"
-        "- To avoid X spam detection, you MUST randomly choose ONE structural hook from the "
-        "list below and vary the exact wording every time. Never reuse the same template "
-        "shape twice in a row. Available hooks:\n"
-        "  1. FBREF ALTERNATIVE: \"Looking for a free FBREF alternative to view advanced "
-        "player data? ...\"\n"
-        "  2. TRANSFER DEBATE: \"[Player 1] vs [Player 2] - who is actually the better "
-        "signing for [Club]? Let's check the data...\"\n"
-        "  3. CONTEXTUAL DEEP-DIVE: \"Before club-to-club talks initiate for [Player 1], the "
-        "underlying metrics on goaldata.com reveal everything...\"\n"
-        "  4. BOLD STAT TEASE: \"The underlying numbers behind [Player]'s season might change "
-        "your mind...\"\n"
-        "  5. QUESTION HOOK: \"Is [Player] actually worth [Club]'s money? The advanced "
-        "metrics tell the real story...\"\n"
-        "  6. SCOUT REPORT: \"Scouting [Player]: here is what the data on goaldata.com "
-        "actually shows...\"\n"
-        "  7. RADAR/VISUAL TEASE: \"[Player 1] vs [Player 2] player radars - the comparison "
-        "every [Club] fan needs to see...\"\n"
-        "  8. MYTH-BUSTER: \"Everyone is talking about [Player], but the data tells a "
-        "different story...\"\n\n"
-        "STEP 3 - STATS PLACEHOLDERS (do NOT invent numbers):\n"
-        "- Include a short block of 2-4 metric lines, each with a relevant emoji and a "
-        "{Insert} placeholder the user will fill in manually. For a comparison use two "
-        "columns. Examples of the exact style:\n"
-        "  ⚽ [Player 1] Non-Penalty xG: {Insert} | [Player 2]: {Insert}\n"
-        "  \U0001f3c3‍♂️ [Player 1] Successful Dribbles %: {Insert} | [Player 2]: {Insert}\n"
-        "- For a single player or a club, use single-value placeholders (e.g. "
-        "⚽ Non-Penalty xG: {Insert}).\n\n"
-        "STEP 4 - CTA + MEDIA:\n"
-        "- End with a strong call-to-action promoting goaldata.com, varied each time (e.g. "
-        "\"Compare player radars & metrics for FREE on goaldata.com\").\n"
-        "- On the final line add a media-attachment indicator exactly like: "
-        "\U0001f4ce [Attach your goaldata.com radar/screenshot or GIF here]\n\n"
-        "OUTPUT RULES:\n"
-        "- Output ONLY the finished draft, ready to copy-paste. No preamble, no explanation, "
-        "no 'Here is your draft', no option lists, no markdown code fences.\n"
-        "- Keep it punchy and X-appropriate. A couple of hashtags are fine. Emojis are "
-        "allowed here (this is a marketing post, unlike the news feed).\n"
-        "- Use the real player/club names from the news, not the bracket placeholders."
+        "You are an expert direct-response copywriter and tactical football analyst. From "
+        "the supplied news text, write EXACTLY 2 promotional sub-tweet variations that drive "
+        "traffic to goaldata.com (a FREE site: Top 5 Leagues comparison, multiple choice "
+        "club comparison, multiple choice position comparison, and free football data for "
+        "30+ leagues).\n"
+        "Write like a real human football analyst talking casually. Be natural, direct and "
+        "cohesive. Avoid corporate language, rigid templates and obvious AI cliches.\n\n"
+
+        "ENTITY & SCENARIO:\n"
+        "- Identify the player(s) and club(s) in the news. Managers, pundits and officials "
+        "are NOT players.\n"
+        "- 2+ players -> head-to-head comparison of two of them (metrics show both values).\n"
+        "- exactly 1 player -> single-player deep-dive.\n"
+        "- no player (club / manager / fixture news) -> a club or team-focused angle built "
+        "around the club in the news (no player comparison).\n\n"
+
+        "STRUCTURE of EACH variation (one flowing narrative, every part leads into the next):\n"
+        "1) Hook: two short sentences. Sentence one states the news naturally. Sentence two "
+        "connects it to goaldata, saying the data there reveals or explains the reality "
+        "behind the move or performance.\n"
+        "2) One empty line.\n"
+        "3) Metric stack: EXACTLY 3 hyper-relevant metrics, one per line, each prefixed with "
+        "a single relevant emoji and ending in a {Insert} placeholder for the user to fill. "
+        "For a comparison use two values: '<emoji> <Metric Name>: {Insert} | {Insert}'. For "
+        "a single player or club use one: '<emoji> <Metric Name>: {Insert}'. Pick the 3 "
+        "metric names from the SCHEMA below based on the subject's position and the "
+        "narrative. Do NOT invent numbers.\n"
+        "4) One empty line.\n"
+        "5) CTA: one short, specific action sentence tied to the metrics, ending in the "
+        "broken link. Model it on the CONVERSION ANCHORS below.\n\n"
+
+        "HARD RULES:\n"
+        "- LENGTH IS CRITICAL: each variation MUST be at most 260 characters total, "
+        "INCLUDING the {Insert} placeholders, so it stays under X's 280 limit after the user "
+        "fills in real values. Count carefully and cut words to fit. Keep the hook to two "
+        "short sentences and the CTA to one short line.\n"
+        "- NEVER write a clickable URL. Always break the link EXACTLY like this: "
+        "goaldata ( . ) com\n"
+        "- NO hashtags. NO em dashes. NO semicolons. NO markdown bold or asterisks. NO "
+        "bullets or dashes before the metric names.\n"
+        "- The two variations must be entirely different in hook angle, sentence length and "
+        "wording (e.g. transfer debate, tactical fit, form check, scouting angle, value for "
+        "money, radar comparison).\n"
+        "- Use the REAL player and club names from the news.\n\n"
+
+        "CONVERSION ANCHORS (rotate / adapt, keep the broken link):\n"
+        "- Run the multiple choice club comparison directly at goaldata ( . ) com\n"
+        "- Compare his profile across the top 5 leagues at goaldata ( . ) com\n"
+        "- Test the multiple choice position comparison tools at goaldata ( . ) com\n"
+        "- Check the full dataset across 30+ leagues at goaldata ( . ) com\n\n"
+
+        "METRIC SCHEMA (choose 3 relevant names):\n"
+        "Attacking: Goals, Expected Goals (xG), Shots On Target, Shot Accuracy %, Total "
+        "Shots, Shot Conversion %, Big Chances Created, Big Chances Missed.\n"
+        "On the Ball: Assists, Key Passes, Passes in Final Third, Dribble Attempts, "
+        "Successful Dribbles, Dribble Success %, Pass Accuracy %, Through Balls, Total "
+        "Crosses, Accurate Crosses, Cross Accuracy %, Fouls Won.\n"
+        "Defending: Tackles, Tackles Won, Tackles Won %, Interceptions, Total Duels, Duels "
+        "Won %, Aerials Won, Aerials Won %, Clearances, Blocked Shots, Dribbled Past.\n"
+        "Discipline/Overview: Appearances, Minutes Played, Fouls, Offsides, Yellow Cards, "
+        "Red Cards, Penalties Taken, Penalties Won.\n"
+        "Goalkeeping: xG Prevented, Clean Sheets, Goals Conceded, Saves, Saves Inside the "
+        "Box, Shots Faced, Penalties Saved.\n\n"
+
+        "BANNED WORDS (never use any of these): can, may, just, that, very, really, "
+        "literally, actually, certainly, probably, basically, could, maybe, delve, embark, "
+        "enlightening, esteemed, shed light, craft, crafting, imagine, realm, game-changer, "
+        "unlock, discover, skyrocket, abyss, not alone, in a world where, revolutionize, "
+        "disruptive, utilize, utilizing, dive, dive deep, dive into, tapestry, illuminate, "
+        "unveil, pivotal, intricate, elucidate, hence, furthermore, however, moreover, in "
+        "conclusion, in summary, harness, exciting, groundbreaking, cutting-edge, "
+        "remarkable, remains to be seen, glimpse into, navigating, landscape, stark, "
+        "testament, boost, skyrocketing, opened up, powerful, inquiries, ever-evolving, "
+        "sanctuary, contemporary, gridlock.\n\n"
+
+        "OUTPUT:\n"
+        "- Output ONLY the two variations. Label them exactly 'Variation 1' and "
+        "'Variation 2', with one blank line between them. No intro text, no headers, no "
+        "explanations, no markdown, no dividers.\n"
+        "- After Variation 2, add one final line exactly: "
+        "\U0001f4ce [Attach your goaldata ( . ) com radar, screenshot or GIF here]"
     )
 
     prompt = (
-        f"Variance token (use it to pick a different hook than last time): {random.randint(1000, 9999)}\n\n"
+        f"Variance token (use it to pick different angles than last time): {random.randint(1000, 9999)}\n\n"
         f"NEWS TEXT:\n{news_text.strip()}"
     )
-    try:
-        response = client.models.generate_content(
-            model=config.GEMINI_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                temperature=1.15,
-            ),
-        )
-        return response.text.strip() if response and response.text else None
-    except Exception as e:
-        logger.error(f"Promo generation error: {e}")
-        return None
+    for attempt in range(2):  # retry once if the model returns an empty response
+        try:
+            response = client.models.generate_content(
+                model=config.GEMINI_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    temperature=1.15,
+                ),
+            )
+            if response and response.text and response.text.strip():
+                return response.text.strip()
+        except Exception as e:
+            logger.error(f"Promo generation error (attempt {attempt + 1}): {e}")
+    return None
 
 
 def detect_team_from_text(title: str, content: str, default_tag: str | None, allow_fallback: bool = True) -> str | None:
