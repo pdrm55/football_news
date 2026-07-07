@@ -1142,42 +1142,41 @@ def generate_promo_subtweet(news_text: str) -> str | None:
         "around the club in the news (no player comparison).\n\n"
 
         "STRUCTURE of EACH variation (one flowing narrative, every part leads into the next):\n"
-        "1) Hook (THE MOST IMPORTANT PART - make it COMPLETE, SPECIFIC and analyst-grade, "
-        "2 to 3 full sentences): First, state the news in a rich, specific way. Attribute "
-        "the claim to its source and name the player, the club, and the manager where the "
-        "news mentions them, and capture the SPECIFIC angle or traits in the news (for "
-        "example physical demands, ball carrying, work rate, combativeness in midfield, "
-        "tactical fit, adaptation to the league). Then connect it to goaldata with a "
-        "SPECIFIC line about what the data there reveals regarding those exact traits. Vary "
-        "the data phrasing each time (Performance analysis on / Individual tracking on / The "
-        "performance database at / Tracking data on) goaldata ( . ) com. NEVER use vague "
-        "filler such as 'reveals the full picture', 'shows the stats that make him', "
-        "'reveals everything', or 'shows the full picture' - always say specifically what "
-        "the data shows about this player's traits.\n"
-        "MODEL THIS DEPTH (do not reuse the wording):\n"
-        "  'Patrice Evra backs Manu Kone to match the physical demands of the Premier League "
-        "under Mikel Arteta at Arsenal. Performance analysis on goaldata ( . ) com details "
-        "how his combativeness in midfield aligns with English football.'\n"
-        "  'Former defender Patrice Evra highlights Manu Kone as an ideal midfield addition "
-        "for Arsenal due to his ball carrying and work rate. Individual tracking on "
-        "goaldata ( . ) com evaluates if his physical traits fit the tactical system.'\n"
+        "1) Hook - COMPLETE and SPECIFIC but TIGHT: exactly 2 sentences. Sentence one states "
+        "the news specifically - attribute the claim to its source and name the player, club "
+        "and manager where present, and capture the ONE or TWO key traits in the news (for "
+        "example energy, ball carrying, duels, work rate, tactical fit). Sentence two "
+        "connects it to goaldata with a SPECIFIC statement about what the data shows about "
+        "those traits. Vary the data phrasing each time (Performance analysis on / Individual "
+        "tracking on / The performance database at / Tracking data on) goaldata ( . ) com. "
+        "Be complete but do NOT pad with extra adjectives or clauses - every word must earn "
+        "its place. NEVER use vague filler such as 'reveals the full picture', 'shows the "
+        "stats that make him', or 'reveals everything'.\n"
+        "MODEL THIS DEPTH AND TIGHTNESS (about 130 characters, do not reuse the wording):\n"
+        "  'Evra backs Manu Kone for Arsenal, citing his energy and duels. goaldata ( . ) "
+        "com shows if his midfield combativeness suits the Premier League.'\n"
+        "  'Evra sees Manu Kone as an ideal Arsenal fit for his ball carrying and work rate. "
+        "Individual tracking on goaldata ( . ) com tests if his profile suits Arteta.'\n"
         "2) One empty line.\n"
         "3) Metric stack: EXACTLY 3 hyper-relevant metrics, one per line, each prefixed with "
         "a single relevant emoji and ending in a {Insert} placeholder for the user to fill. "
         "For a comparison use two values: '<emoji> <Metric Name>: {Insert} | {Insert}'. For "
         "a single player or club use one: '<emoji> <Metric Name>: {Insert}'. Pick the 3 "
         "metric names from the SCHEMA below based on the subject's position and the "
-        "narrative. Do NOT invent numbers.\n"
+        "narrative, and PREFER SHORT metric names (e.g. Goals, Assists, Tackles, Key Passes, "
+        "Duels Won %) over long ones to save characters. Do NOT invent numbers.\n"
         "4) One empty line.\n"
         "5) CTA: one short, specific action sentence tied to the metrics, ending in the "
         "broken link. Model it on the CONVERSION ANCHORS below.\n\n"
 
         "HARD RULES:\n"
-        "- LENGTH: prioritise a COMPLETE, specific hook over brevity. Aim for the final "
-        "posted tweet (once the user replaces each {Insert} with a short real value) to sit "
-        "around 280 characters. The {Insert} placeholders are longer than the numbers that "
-        "replace them, so the draft may run a little over 280 - that is fine. Do not pad, "
-        "and do not sacrifice the specific detail of the hook to save characters.\n"
+        "- LENGTH IS CRITICAL: each variation, counting everything from its first word to "
+        "its CTA and INCLUDING the {Insert} placeholders (the media line does not count), "
+        "MUST be at most 275 characters. Budget: the HOOK about 130 characters (2 short "
+        "sentences), the 3 metric lines together about 75, and the CTA about 55. Count as "
+        "you write. If a variation runs over, SHORTEN THE HOOK first (cut adjectives and "
+        "clauses) until it fits - keep a complete 2-sentence hook but make it lean. This is "
+        "a hard limit, not a target.\n"
         "- NEVER write a clickable URL. Always break the link EXACTLY like this: "
         "goaldata ( . ) com\n"
         "- NO hashtags. NO em dashes. NO semicolons. NO markdown bold or asterisks. NO "
@@ -1187,11 +1186,13 @@ def generate_promo_subtweet(news_text: str) -> str | None:
         "money, radar comparison).\n"
         "- Use the REAL player and club names from the news.\n\n"
 
-        "CONVERSION ANCHORS (rotate / adapt, keep the broken link):\n"
-        "- Run the multiple choice club comparison directly at goaldata ( . ) com\n"
+        "CONVERSION ANCHORS (rotate / adapt, keep them SHORT ~45-55 chars and keep the "
+        "broken link):\n"
         "- Compare his profile across the top 5 leagues at goaldata ( . ) com\n"
-        "- Test the multiple choice position comparison tools at goaldata ( . ) com\n"
-        "- Check the full dataset across 30+ leagues at goaldata ( . ) com\n\n"
+        "- Run the club comparison at goaldata ( . ) com\n"
+        "- Test the position comparison tools at goaldata ( . ) com\n"
+        "- Check the full 30+ league dataset at goaldata ( . ) com\n"
+        "- See his full player profile at goaldata ( . ) com\n\n"
 
         "METRIC SCHEMA (choose 3 relevant names):\n"
         "Attacking: Goals, Expected Goals (xG), Shots On Target, Shot Accuracy %, Total "
@@ -1229,7 +1230,10 @@ def generate_promo_subtweet(news_text: str) -> str | None:
         f"Variance token (use it to pick different angles than last time): {random.randint(1000, 9999)}\n\n"
         f"NEWS TEXT:\n{news_text.strip()}"
     )
-    for attempt in range(2):  # retry once if the model returns an empty response
+    # Generate a few times and keep the tightest draft whose variations respect X's limit
+    # (the model doesn't count characters perfectly, so we enforce it here).
+    best, best_worst = None, 10 ** 9
+    for attempt in range(4):
         try:
             response = client.models.generate_content(
                 model=config.GEMINI_MODEL,
@@ -1239,11 +1243,31 @@ def generate_promo_subtweet(news_text: str) -> str | None:
                     temperature=1.15,
                 ),
             )
-            if response and response.text and response.text.strip():
-                return response.text.strip()
+            text = response.text.strip() if response and response.text else None
+            if not text:
+                continue
+            worst = _promo_worst_variation_len(text)
+            if worst <= 280:
+                return text
+            if worst < best_worst:
+                best, best_worst = text, worst
         except Exception as e:
             logger.error(f"Promo generation error (attempt {attempt + 1}): {e}")
-    return None
+    return best
+
+
+def _promo_worst_variation_len(text: str) -> int:
+    """Length (as it will post, i.e. with {Insert} replaced by a short value) of the longest
+    variation in a promo draft. The trailing media-attachment line is excluded."""
+    worst = 0
+    for part in re.split(r'(?=Variation\s*\d)', text or ''):
+        if not re.match(r'\s*Variation\s*\d', part):
+            continue
+        core = part.split('\U0001f4ce')[0].strip()          # drop the media line
+        core = re.sub(r'^Variation\s*\d\s*', '', core).strip()  # drop the label
+        filled = re.sub(r'\{Insert\}', '00', core)          # simulate a filled-in value
+        worst = max(worst, len(filled))
+    return worst
 
 
 def detect_team_from_text(title: str, content: str, default_tag: str | None, allow_fallback: bool = True) -> str | None:
