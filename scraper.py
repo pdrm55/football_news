@@ -33,6 +33,32 @@ PROTECTED_DOMAINS = [
 # Last-fetch time per proxy-routed source URL, to throttle metered proxy traffic.
 _proxy_last_fetch = {}
 
+# Last Gemini API failure, so the bot can alert admins on a billing/quota outage instead of
+# degrading silently. None when Gemini is healthy, else (timestamp, kind, message) where
+# kind is 'billing' (prepay credits gone), 'rate_limit' (other 429) or 'other'.
+LAST_GEMINI_ERROR = None
+
+
+def _record_gemini_error(exc) -> str:
+    """Classifies a Gemini exception, stores it in LAST_GEMINI_ERROR, returns the kind."""
+    global LAST_GEMINI_ERROR
+    msg = str(exc)
+    low = msg.lower()
+    if 'credits are depleted' in low or 'resource_exhausted' in low:
+        kind = 'billing'
+    elif '429' in low or 'rate limit' in low:
+        kind = 'rate_limit'
+    else:
+        kind = 'other'
+    LAST_GEMINI_ERROR = (time.time(), kind, msg[:300])
+    return kind
+
+
+def _clear_gemini_error() -> None:
+    """Marks Gemini as healthy again after a successful call."""
+    global LAST_GEMINI_ERROR
+    LAST_GEMINI_ERROR = None
+
 # Domains that are not Cloudflare-blocked but render their article feed with
 # client-side JavaScript, so plain requests returns no article links. These are
 # routed through the headless-browser (DrissionPage) path just like protected sites.
@@ -1108,9 +1134,11 @@ def run_gemini_summarizer(title: str, content: str, active_filters: list[str]) -
         )
         reply = response.text.strip()
         logger.info(f"Gemini Response: {reply[:100]}...")
+        _clear_gemini_error()
         return reply
     except Exception as e:
-        logger.error(f"Gemini API invocation error: {e}")
+        kind = _record_gemini_error(e)
+        logger.error(f"Gemini API invocation error ({kind}): {e}")
         return None
 
 
@@ -1246,13 +1274,15 @@ def generate_promo_subtweet(news_text: str) -> str | None:
             text = response.text.strip() if response and response.text else None
             if not text:
                 continue
+            _clear_gemini_error()
             worst = _promo_worst_variation_len(text)
             if worst <= 280:
                 return text
             if worst < best_worst:
                 best, best_worst = text, worst
         except Exception as e:
-            logger.error(f"Promo generation error (attempt {attempt + 1}): {e}")
+            kind = _record_gemini_error(e)
+            logger.error(f"Promo generation error (attempt {attempt + 1}, {kind}): {e}")
     return best
 
 

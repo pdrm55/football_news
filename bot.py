@@ -32,6 +32,47 @@ bot = telebot.TeleBot(config.TELEGRAM_BOT_TOKEN)
 def is_admin(user_id: int) -> bool:
     return user_id in getattr(config, 'ADMIN_USER_IDS', [config.ADMIN_USER_ID])
 
+# Gemini outage alerting. A depleted API key fails on every article, so the alert is
+# throttled; _gemini_alert_active stays set until a summarization succeeds again.
+_gemini_alert_ts = 0.0
+_gemini_alert_active = False
+
+def notify_admins(text: str) -> None:
+    """Sends a plain-text notice to every configured admin. Never raises."""
+    for admin_id in (getattr(config, 'ADMIN_USER_IDS', None) or [config.ADMIN_USER_ID]):
+        if not admin_id:
+            continue
+        try:
+            bot.send_message(chat_id=admin_id, text=text)
+        except Exception as e:
+            logger.error(f"Failed to notify admin {admin_id}: {e}")
+
+def _alert_gemini_outage(pending_count: int) -> None:
+    """Alerts admins that Gemini billing is exhausted, at most once per interval."""
+    global _gemini_alert_ts, _gemini_alert_active
+    err = getattr(scraper, 'LAST_GEMINI_ERROR', None)
+    if not err or err[1] != 'billing':
+        return
+    if time.time() - _gemini_alert_ts < config.GEMINI_ALERT_INTERVAL_SECONDS:
+        return
+    _gemini_alert_ts = time.time()
+    _gemini_alert_active = True
+    logger.warning("Gemini prepay credits depleted. Alerting admins.")
+    notify_admins(
+        "🚨 Gemini API: prepay credits are depleted.\n\n"
+        "The bot cannot summarize articles, so nothing is being posted to the channel.\n"
+        f"{pending_count} article(s) are queued and will post once credits are restored.\n\n"
+        "Top up here: https://ai.studio/projects"
+    )
+
+def _alert_gemini_recovered() -> None:
+    """Sends a single all-clear the first time Gemini succeeds after an outage alert."""
+    global _gemini_alert_active
+    if _gemini_alert_active and getattr(scraper, 'LAST_GEMINI_ERROR', None) is None:
+        _gemini_alert_active = False
+        logger.info("Gemini recovered. Notifying admins.")
+        notify_admins("✅ Gemini API is working again. The bot has resumed summarizing and posting.")
+
 def clean_text_formatting(text: str) -> str:
     """Removes bolding, asterisks, emojis, hashtags, semicolons, and em dashes."""
     if not text:
@@ -322,7 +363,12 @@ def process_and_broadcast_pipeline():
             # 2. Summarize web page or RSS articles using Gemini
             logger.info(f"Summarizing article {art_id}: {title[:50]}...")
             summary = scraper.run_gemini_summarizer(title, content, active_filters)
-        
+            if summary is None:
+                # A depleted API key silently stops every post, so tell the admins.
+                _alert_gemini_outage(len(pending_articles))
+            else:
+                _alert_gemini_recovered()
+
         if summary is None:
             # API failure, keep it pending to try again later
             continue

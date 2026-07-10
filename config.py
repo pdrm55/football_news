@@ -132,6 +132,9 @@ SCHEDULER_CYCLE_SECONDS = FAST_CYCLE_SECONDS  # backward-compat alias
 MAX_BATCH_SIZE = 30            # Max pending articles to process in one cycle
 MAX_BACKLOG = 15               # Max backlog articles to process on startup
 DB_RETENTION_DAYS = 7          # DB retention policy period
+# Minimum seconds between repeated admin alerts about a Gemini billing/quota outage. A
+# depleted key fails on every article, so the alert must be throttled, not per-failure.
+GEMINI_ALERT_INTERVAL_SECONDS = int(os.getenv("GEMINI_ALERT_INTERVAL_SECONDS", "3600"))
 
 # TikTok Monitor parameters
 TIKTOK_CYCLE_SECONDS = 600     # Polling interval for the TikTok monitor loop
