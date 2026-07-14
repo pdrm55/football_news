@@ -1145,8 +1145,8 @@ def run_gemini_summarizer(title: str, content: str, active_filters: list[str]) -
 def generate_promo_subtweet(news_text: str) -> str | None:
     """On-demand: turn a news post into TWO promotional X sub-tweet variations for
     goaldata.com. Human, natural analyst voice (no AI cliches), a tight narrative arc,
-    emoji {Insert} metric placeholders, broken link, and specific product CTAs. Returns the
-    two labelled variations as text."""
+    emoji metric lines with BLANK values (the user fills them in), broken link goaldata(.)com,
+    and specific product CTAs. Returns the two labelled variations as text."""
     if not news_text or not news_text.strip():
         return None
     import random
@@ -1176,7 +1176,7 @@ def generate_promo_subtweet(news_text: str) -> str | None:
         "example energy, ball carrying, duels, work rate, tactical fit). Sentence two "
         "connects it to goaldata with a SPECIFIC statement about what the data shows about "
         "those traits. Vary the data phrasing each time (Performance analysis on / Individual "
-        "tracking on / The performance database at / Tracking data on) goaldata ( . ) com. "
+        "tracking on / The performance database at / Tracking data on) goaldata(.)com. "
         "Be complete but do NOT pad with extra adjectives or clauses - every word must earn "
         "its place. NEVER use vague filler such as 'reveals the full picture', 'shows the "
         "stats that make him', or 'reveals everything'.\n"
@@ -1184,12 +1184,14 @@ def generate_promo_subtweet(news_text: str) -> str | None:
         "  'Evra backs Manu Kone for Arsenal, citing his energy and duels. goaldata ( . ) "
         "com shows if his midfield combativeness suits the Premier League.'\n"
         "  'Evra sees Manu Kone as an ideal Arsenal fit for his ball carrying and work rate. "
-        "Individual tracking on goaldata ( . ) com tests if his profile suits Arteta.'\n"
+        "Individual tracking on goaldata(.)com tests if his profile suits Arteta.'\n"
         "2) One empty line.\n"
         "3) Metric stack: EXACTLY 3 hyper-relevant metrics, one per line, each prefixed with "
-        "a single relevant emoji and ending in a {Insert} placeholder for the user to fill. "
-        "For a comparison use two values: '<emoji> <Metric Name>: {Insert} | {Insert}'. For "
-        "a single player or club use one: '<emoji> <Metric Name>: {Insert}'. Pick the 3 "
+        "a single relevant emoji and its name, then a colon and a space with the VALUE LEFT "
+        "BLANK (no placeholder text, no number - the user fills it in manually). "
+        "For a comparison keep a divider so both values are obvious: "
+        "'<emoji> <Metric Name>: | '. For a single player or club just: "
+        "'<emoji> <Metric Name>: '. Pick the 3 "
         "metric names from the SCHEMA below based on the subject's position and the "
         "narrative, and PREFER SHORT metric names (e.g. Goals, Assists, Tackles, Key Passes, "
         "Duels Won %) over long ones to save characters. Do NOT invent numbers.\n"
@@ -1199,14 +1201,14 @@ def generate_promo_subtweet(news_text: str) -> str | None:
 
         "HARD RULES:\n"
         "- LENGTH IS CRITICAL: each variation, counting everything from its first word to "
-        "its CTA and INCLUDING the {Insert} placeholders (the media line does not count), "
+        "its CTA (blank metric values count as empty), "
         "MUST be at most 275 characters. Budget: the HOOK about 130 characters (2 short "
         "sentences), the 3 metric lines together about 75, and the CTA about 55. Count as "
         "you write. If a variation runs over, SHORTEN THE HOOK first (cut adjectives and "
         "clauses) until it fits - keep a complete 2-sentence hook but make it lean. This is "
         "a hard limit, not a target.\n"
         "- NEVER write a clickable URL. Always break the link EXACTLY like this: "
-        "goaldata ( . ) com\n"
+        "goaldata(.)com\n"
         "- NO hashtags. NO em dashes. NO semicolons. NO markdown bold or asterisks. NO "
         "bullets or dashes before the metric names.\n"
         "- The two variations must be entirely different in hook angle, sentence length and "
@@ -1216,11 +1218,11 @@ def generate_promo_subtweet(news_text: str) -> str | None:
 
         "CONVERSION ANCHORS (rotate / adapt, keep them SHORT ~45-55 chars and keep the "
         "broken link):\n"
-        "- Compare his profile across the top 5 leagues at goaldata ( . ) com\n"
-        "- Run the club comparison at goaldata ( . ) com\n"
-        "- Test the position comparison tools at goaldata ( . ) com\n"
-        "- Check the full 30+ league dataset at goaldata ( . ) com\n"
-        "- See his full player profile at goaldata ( . ) com\n\n"
+        "- Compare his profile across the top 5 leagues at goaldata(.)com\n"
+        "- Run the club comparison at goaldata(.)com\n"
+        "- Test the position comparison tools at goaldata(.)com\n"
+        "- Check the full 30+ league dataset at goaldata(.)com\n"
+        "- See his full player profile at goaldata(.)com\n\n"
 
         "METRIC SCHEMA (choose 3 relevant names):\n"
         "Attacking: Goals, Expected Goals (xG), Shots On Target, Shot Accuracy %, Total "
@@ -1249,9 +1251,7 @@ def generate_promo_subtweet(news_text: str) -> str | None:
         "OUTPUT:\n"
         "- Output ONLY the two variations. Label them exactly 'Variation 1' and "
         "'Variation 2', with one blank line between them. No intro text, no headers, no "
-        "explanations, no markdown, no dividers.\n"
-        "- After Variation 2, add one final line exactly: "
-        "\U0001f4ce [Attach your goaldata ( . ) com radar, screenshot or GIF here]"
+        "explanations, no markdown, no dividers, no trailing media/attachment line."
     )
 
     prompt = (
@@ -1287,16 +1287,16 @@ def generate_promo_subtweet(news_text: str) -> str | None:
 
 
 def _promo_worst_variation_len(text: str) -> int:
-    """Length (as it will post, i.e. with {Insert} replaced by a short value) of the longest
-    variation in a promo draft. The trailing media-attachment line is excluded."""
+    """Length (as it will post) of the longest variation in a promo draft. Metric values are
+    left blank for the user to fill, so we measure the text as-is. Any stray trailing
+    media-attachment line is excluded defensively."""
     worst = 0
     for part in re.split(r'(?=Variation\s*\d)', text or ''):
         if not re.match(r'\s*Variation\s*\d', part):
             continue
-        core = part.split('\U0001f4ce')[0].strip()          # drop the media line
+        core = part.split('\U0001f4ce')[0].strip()          # drop any stray media line
         core = re.sub(r'^Variation\s*\d\s*', '', core).strip()  # drop the label
-        filled = re.sub(r'\{Insert\}', '00', core)          # simulate a filled-in value
-        worst = max(worst, len(filled))
+        worst = max(worst, len(core))
     return worst
 
 
