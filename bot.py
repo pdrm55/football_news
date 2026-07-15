@@ -206,6 +206,13 @@ def send_telegram_broadcast(summary: str, url: str, media_url: str | None, threa
     """Delivers the post to Telegram as plain text. If thread_id fails (e.g. topic not found),
     it automatically falls back to sending directly to the main chat.
     """
+    # Telegram's built-in "General" forum topic is id 1, but the Bot API rejects
+    # message_thread_id=1 with "message thread not found" — the General topic is addressed
+    # by OMITTING the thread id. This group's Arsenal tab IS that General topic
+    # (THREAD_ID_ARSENAL=1), so normalise 1 -> None to post there directly instead of
+    # relying on a failed first attempt plus the main-chat fallback.
+    if thread_id == 1:
+        thread_id = None
     formatted_msg = format_broadcast(summary, url)
     copy_markup = build_post_markup(summary)  # Copy (short posts) + Generate Promo Subtweet
 
