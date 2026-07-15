@@ -380,8 +380,13 @@ def process_and_broadcast_pipeline():
             
         # 3. Handle multiple updates split by delimiter ---TALKING_POINT---
         chunks = [c.strip() for c in summary.split('---TALKING_POINT---') if c.strip()]
-        valid_chunks = [c for c in chunks if not is_skip_text(c)]
-        
+        # Drop chunks that carry no text once emojis/markdown are stripped (e.g. emoji-only
+        # tweets like "😂"). Such a chunk cleans to "" and, under the inner-loop `continue`,
+        # used to leave the article 'pending' forever — these corpses then piled up at the
+        # front of the oldest-first batch and starved all real news. Filtering them here
+        # routes the article to the 'skipped' path below so the queue keeps draining.
+        valid_chunks = [c for c in chunks if not is_skip_text(c) and clean_text_formatting(c)]
+
         if not valid_chunks:
             logger.info(f"Article {art_id} skipped: no valid non-SKIP chunks found.")
             database.update_article_summary_status(art_id, 'SKIP', 'skipped')
