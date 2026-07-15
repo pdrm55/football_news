@@ -140,16 +140,38 @@ def format_broadcast(summary: str, url: str) -> str:
     # Escape only &, <, > for HTML mode (quote=False keeps apostrophes/quotes as-is, so a
     # quote like Gunners' is not turned into Gunners&#x27;). Also decode any HTML entities
     # already present in the scraped text so nothing shows raw.
-    body = html.escape(html.unescape(summary or ""), quote=False)
-    lines = ["BREAKING UPDATE", "====================", body, "===================="]
-    if url and (url.startswith('http://') or url.startswith('https://')):
-        lines.append(f"Source URL: {html.escape(url, quote=False)}")
-    msg = "\n".join(lines)
+    # Telegram hard limit for a text message is 4096 chars. The <pre> copy-block repeats the
+    # full text, so body+copy roughly DOUBLES the length — a ~2000-char summary then blows
+    # past 4096 and Telegram rejects it with "message is too long", so longer posts (the
+    # web/RSS "usual sources") were silently never delivered. Keep the copy-block only when
+    # the whole message still fits; otherwise drop it (the visible body already holds the
+    # full text) and, if the body alone is still too long, truncate it.
+    TG_LIMIT = 4096
 
-    full = html.unescape(copy_body(summary))
-    if full:
-        msg += "\n\n📋 Copy:\n<pre>" + html.escape(full, quote=False) + "</pre>"
-    return msg
+    def _assemble(text: str, with_copy: bool) -> str:
+        body = html.escape(html.unescape(text or ""), quote=False)
+        lines = ["BREAKING UPDATE", "====================", body, "===================="]
+        if url and (url.startswith('http://') or url.startswith('https://')):
+            lines.append(f"Source URL: {html.escape(url, quote=False)}")
+        out = "\n".join(lines)
+        if with_copy:
+            full = html.unescape(copy_body(text))
+            if full:
+                out += "\n\n📋 Copy:\n<pre>" + html.escape(full, quote=False) + "</pre>"
+        return out
+
+    with_copy = _assemble(summary, True)
+    if len(with_copy) <= TG_LIMIT:
+        return with_copy
+
+    body_only = _assemble(summary, False)
+    if len(body_only) <= TG_LIMIT:
+        return body_only
+
+    # Body alone still over the limit (rare): truncate the raw summary, no copy-block. The
+    # -200 leaves ample room for the header/footer/URL/ellipsis and any HTML-escape growth.
+    truncated = (summary or "")[:TG_LIMIT - 200].rstrip() + "…"
+    return _assemble(truncated, False)
 
 # Copy-to-clipboard button (kept for short posts as a quick one-tap; long posts are
 # fully covered by the copy-block in the message above, which has no length limit).
